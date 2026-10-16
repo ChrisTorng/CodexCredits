@@ -1,0 +1,36 @@
+name: Windows Build
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri -> target
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - run: npm run build
+      - run: cargo test --manifest-path src-tauri/Cargo.toml
+      - run: npm run tauri build -- --no-bundle
+      - name: Package ZIP
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force release | Out-Null
+          Copy-Item src-tauri/target/release/CodexCredits.exe release/
+          Copy-Item README.md,LICENSE release/
+          Compress-Archive release/* CodexCredits-Windows-x64.zip -Force
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CodexCredits-Windows-x64
+          path: CodexCredits-Windows-x64.zip
+          if-no-files-found: error

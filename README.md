@@ -1,30 +1,21 @@
 # CodexCredits
 
-Local-first Codex quota/credits monitoring, history, scheduling, and Banked Reset manager.
+Windows-first Rust + Tauri 2 Codex quota monitor (MIT).
 
-**Status:** Architecture evaluation. Windows first; planned Ubuntu and Android, potential macOS and iOS. Original [android-codex-tools](https://github.com/ChrisTorng/android-codex-tools) remains untouched.
+**Current phase: read-only monitoring MVP.** Includes Windows tray/close-to-hide/quit-to-stop, usage and history graph, SQLite persistence, Windows Credential Manager token storage, configurable sampling and Rust scheduling *model*. Automatic Codex requests, Banked Reset, OAuth PKCE and ntfy sending **are not yet implemented**. This is not feature-parity with the original Android app.
 
-## Product requirements
+## Build on Windows
+Install Node.js 22+, Rust MSVC, Microsoft C++ Build Tools and Windows SDK.
 
-- A small Windows **system tray** app, not a hosted website.
-- Closing the main window hides it to the tray, with monitoring, history collection and scheduled actions continuing.
-- **Quit / Exit** from the tray terminates the application and stops *all* monitoring, sampling and scheduled actions.
-- No Windows Task Scheduler, Windows Service, persistent daemon, cloud account or hosted backend is required.
-- The main window may be compact or expandable. The history view supports long-term local retention and larger charts.
-- Keep the app process lifecycle independent from the UI window lifecycle.
-- Core rules and API client should be portable; platform-specific tray, keychain and mobile background integration are adapters.
-- Persist user settings and non-secret history locally (SQLite recommended). Store OAuth tokens in OS-backed protected storage.
-- Sleep/shutdown: work is suspended; on next launch/resume, reconcile state without replaying stale triggers or spending reset credits unexpectedly.
-- Android and iOS cannot inherit desktop tray/lifecycle guarantees; future mobile implementations must adapt to OS restrictions.
+```powershell
+npm install
+npm run tauri dev
+cargo test --manifest-path src-tauri/Cargo.toml
+npm run tauri build -- --no-bundle
+```
 
-## Technology evaluation
+The [Windows GitHub Actions workflow](https://github.com/ChrisTorng/CodexCredits/actions/workflows/windows.yml) creates `CodexCredits-Windows-x64.zip`. The resulting portable EXE uses Windows WebView2, without .NET runtime.
 
-Two leading approaches:
-1. **Tauri 2 + Rust core + TypeScript UI**, using the system WebView rather than bundling a browser.
-2. **Avalonia + .NET Native AOT (C#)**, self-contained with no end-user .NET runtime requirement.
+Security: access tokens stay in the OS credential vault, not SQLite. No fixed ntfy ID. Scheduler is forced Off until automated requests are correctly implemented and tested. Closing the window keeps polling; Quit terminates app and stops polling. Backend Codex API is unofficial and subject to change. Original [android-codex-tools](https://github.com/ChrisTorng/android-codex-tools) repo is unchanged.
 
-The intended first platform is Windows. Choose the production implementation after checking deployment footprint, tray behavior, and runtime constraints. **No framework is locked in by this document.**
-
-## License
-
-[MIT](LICENSE).
+MIT Copyright (c) 2026 ChrisTorng.
