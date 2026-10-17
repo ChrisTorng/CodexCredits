@@ -116,3 +116,7 @@ button.primary{color:#fff;background:var(--blue);border-color:var(--blue)}
  .history-page{max-width:760px}
  .app-header{max-width:780px;margin:0 auto;width:100%}
 }
+
+.notification-switch{flex:1;display:flex;align-items:center;gap:8px;min-width:0;font-size:14px}
+.notification-switch input{width:18px;height:18px;min-height:18px;flex:0 0 auto}
+#native-test{flex:0 0 78px}

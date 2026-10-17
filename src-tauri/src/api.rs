@@ -14,7 +14,7 @@ pub struct Credit {pub id:String,pub title:String,pub description:String,pub exp
 #[derive(Debug,Clone,Serialize,Deserialize,Default)]
 pub struct Credits {pub count:i64,pub available:Vec<Credit>}
 #[derive(Debug,Clone,Serialize,Deserialize,Default)]
-pub struct Global {pub last_reset_at:Option<String>,pub age_days:Option<f64>,pub p24:Option<i64>,pub p48:Option<i64>}
+pub struct Global {pub last_reset_at:Option<String>,pub age_days:Option<f64>,pub p24:Option<i64>,pub p48:Option<i64>,pub avg_days:Option<f64>,pub median_days:Option<f64>,pub median_estimate_at:Option<String>}
 fn bucket(root:&Value,name:&str)->(Option<f64>,Option<String>){
  let b=&root[name];
  let pct=b["used_percent"].as_f64().filter(|n|n.is_finite()).map(|n|n.clamp(0.,100.));
@@ -82,12 +82,45 @@ pub async fn trigger_minimal(token:&str,account_id:Option<&str>)->Result<(),Stri
  Ok(())
 }
 pub async fn global_reset()->Result<Global,String>{
- let response=http()?.get("https://codex-reset.com/api/forecast").header("User-Agent","CodexCredits/0.2")
-  .send().await.map_err(|e|e.to_string())?;
- if !response.status().is_success(){return Err(format!("Global Reset HTTP {}",response.status()));}
- let v:Value=response.json().await.map_err(|e|e.to_string())?;
- Ok(Global{last_reset_at:v["last_reset_at"].as_str().map(str::to_owned),age_days:v["age_days"].as_f64(),
-  p24:v["probabilities"]["rounded_24h"].as_i64(),p48:v["probabilities"]["rounded_48h"].as_i64()})
+ let client=http()?;
+ let forecast=client.get("https://codex-reset.com/api/forecast")
+  .header("User-Agent","CodexCredits/0.2").send().await.map_err(|e|e.to_string())?;
+ if !forecast.status().is_success(){return Err(format!("Global Reset HTTP {}",forecast.status()));}
+ let v:Value=forecast.json().await.map_err(|e|e.to_string())?;
+ let mut last=v["last_reset_at"].as_str().map(str::to_owned);
+ let mut gaps:Vec<f64>=Vec::new();
+ // Android source: only announced reset events in the public timeline count.
+ if let Ok(response)=client.get("https://codex-reset.com/api/timeline")
+     .header("User-Agent","CodexCredits/0.2").send().await{
+  if let Ok(timeline)=response.json::<Value>().await{
+   let mut resets:Vec<chrono::DateTime<chrono::FixedOffset>>=timeline["events"].as_array()
+    .into_iter().flatten()
+    .filter(|e|e["group"].as_str().is_some_and(|v|v.eq_ignore_ascii_case("reset"))
+      &&e["announcement_state"].as_str().is_some_and(|v|v.eq_ignore_ascii_case("announced")))
+    .filter_map(|e|e["effective_at"].as_str().or_else(||e["announced_at"].as_str()))
+    .filter_map(|iso|chrono::DateTime::parse_from_rfc3339(iso).ok())
+    .collect();
+   resets.sort();resets.dedup();
+   if last.is_none(){last=resets.last().map(|d|d.to_rfc3339());}
+   let start=resets.len().saturating_sub(10).max(1);
+   for i in start..resets.len(){
+    let diff=resets[i].signed_duration_since(resets[i-1]).num_seconds();
+    if diff>0{gaps.push(diff as f64/86400.)}
+   }
+  }
+ }
+ gaps.sort_by(|a,b|a.total_cmp(b));
+ let avg=if gaps.is_empty(){None}else{Some(gaps.iter().sum::<f64>()/gaps.len() as f64)};
+ let median=if gaps.is_empty(){None}else{
+  let n=gaps.len();Some(if n%2!=0{gaps[n/2]}else{(gaps[n/2-1]+gaps[n/2])/2.})};
+ let estimate=last.as_deref().and_then(|iso|chrono::DateTime::parse_from_rfc3339(iso).ok())
+  .zip(median).and_then(|(time,days)|{
+   chrono::Duration::try_seconds((days*86400.) as i64).map(|delta|time+delta)
+  }).map(|time|time.to_rfc3339());
+ Ok(Global{last_reset_at:last,age_days:v["age_days"].as_f64(),
+  p24:v["probabilities"]["rounded_24h"].as_i64(),
+  p48:v["probabilities"]["rounded_48h"].as_i64(),
+  avg_days:avg,median_days:median,median_estimate_at:estimate})
 }
 pub async fn ntfy_send(topic:&str,title:&str,message:&str)->Result<(),String>{
  let url=url::Url::parse(topic).map_err(|_|"ntfy 網址格式錯誤")?;

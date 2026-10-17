@@ -13,6 +13,18 @@ pub fn open(path:&Path)->Result<Connection,String>{
   CREATE INDEX IF NOT EXISTS idx_events_at ON events(at);").map_err(|e|e.to_string())?;
  Ok(conn)
 }
+pub fn get_meta(db:&Connection,key:&str)->Option<String>{
+ db.query_row("SELECT value FROM kv WHERE key=?1",params![key],|r|r.get::<_,String>(0)).ok()
+}
+pub fn set_meta(db:&Connection,key:&str,value:Option<&str>)->Result<(),String>{
+ if let Some(text)=value{
+  db.execute("INSERT INTO kv(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",params![key,text])
+   .map_err(|e|e.to_string())?;
+ }else{
+  db.execute("DELETE FROM kv WHERE key=?1",params![key]).map_err(|e|e.to_string())?;
+ }
+ Ok(())
+}
 pub fn get_settings(db:&Connection)->Settings{
  db.query_row("SELECT value FROM kv WHERE key='settings'",[],|r|r.get::<_,String>(0))
   .ok().and_then(|x|serde_json::from_str(&x).ok()).unwrap_or_default()
@@ -73,5 +85,7 @@ pub fn events(db:&Connection)->Result<Vec<serde_json::Value>,String>{
   let s=get_settings(&db);save_settings(&db,&s).unwrap();assert_eq!(get_settings(&db).sampling_minutes,10);
   add_sample(&db,Some(27.),Some(45.),None,None).unwrap();assert_eq!(history(&db).unwrap().len(),1);
   event(&db,"test","測試").unwrap();assert_eq!(events(&db).unwrap().len(),1);
+  set_meta(&db,"banked_armed",Some("credit-test")).unwrap();assert_eq!(get_meta(&db,"banked_armed"),Some("credit-test".into()));
+  set_meta(&db,"banked_armed",None).unwrap();assert_eq!(get_meta(&db,"banked_armed"),None);
  }
 }

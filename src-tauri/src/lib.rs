@@ -7,11 +7,13 @@ mod engine;
 
 use std::{sync::{Arc,Mutex},time::Duration};
 use serde::Serialize;
+use tauri_plugin_notification::NotificationExt;
 use tauri::{AppHandle,Emitter,Manager,WindowEvent};
 use tauri::menu::{Menu,MenuItem};
 use tauri::tray::TrayIconBuilder;
 
 struct State{
+ app:AppHandle,
  db:Mutex<rusqlite::Connection>,
  settings:Mutex<schedule::Settings>,
  usage:Mutex<Option<api::Usage>>,
@@ -103,6 +105,7 @@ async fn refresh_internal(s:&State,force_aux:bool)->Result<api::Usage,String>{
     if let Some(selected)=selected{
      if !c.available.iter().any(|x|x.id==selected){
       *s.armed.lock().unwrap()=None;
+      let _=storage::set_meta(&s.db.lock().unwrap(),"banked_armed",None);
       record(s,"banked_reset","待命的 Banked Reset 已不可用，取消待命");
      }
     }
@@ -122,7 +125,13 @@ async fn refresh_internal(s:&State,force_aux:bool)->Result<api::Usage,String>{
  Ok(value)
 }
 async fn notify(s:&State,title:&str,message:&str){
- let url=s.settings.lock().unwrap().ntfy_topic.clone();
+ let settings=s.settings.lock().unwrap().clone();
+ if settings.native_notify_enabled{
+  if let Err(e)=s.app.notification().builder().title(title).body(message).show(){
+   record(s,"warning",&format!("Windows 通知發送失敗: {e}"));
+  }
+ }
+ let url=settings.ntfy_topic;
  if !url.is_empty(){
   let result=api::ntfy_send(&url,title,message).await;
   *s.ntfy_status.lock().unwrap()=match result{
@@ -168,6 +177,7 @@ async fn consume(s:&State,allow_partial:bool,selected:Option<String>)->Result<()
  let windows=api::consume_credit(&access.token,access.account_id.as_deref(),&credit.id).await?;
  if windows<=0{return Err("伺服器未重置任何配額視窗".into())}
  *s.armed.lock().unwrap()=None;
+ storage::set_meta(&s.db.lock().unwrap(),"banked_armed",None)?;
  tokio::time::sleep(Duration::from_secs(1)).await;
  let _=refresh_internal(s,true).await;
  record(s,"banked_reset",&format!("Banked Reset 已使用 · 重置 {windows} 個視窗"));
@@ -202,6 +212,7 @@ async fn consume(s:&State,allow_partial:bool,selected:Option<String>)->Result<()
  credentials::sign_out()?;
  *s.usage.lock().unwrap()=None;*s.credits.lock().unwrap()=None;
  *s.armed.lock().unwrap()=None;
+ storage::set_meta(&s.db.lock().unwrap(),"banked_armed",None)?;
  {
   let mut settings=s.settings.lock().unwrap();settings.mode=schedule::Mode::Off;
   let copy=settings.clone();drop(settings);
@@ -226,12 +237,15 @@ async fn consume(s:&State,allow_partial:bool,selected:Option<String>)->Result<()
  let _=app.emit("credits:updated",());Ok(snapshot(&s))
 }
 #[tauri::command]fn toggle_banked_armed(s:tauri::State<'_,Arc<State>>)->Result<Snapshot,String>{
- let mut armed=s.armed.lock().unwrap();
- if armed.is_some(){*armed=None;drop(armed);record(&s,"banked_reset","取消 Banked Reset 待命");}
- else{
-  let credit=s.credits.lock().unwrap().as_ref().and_then(|x|x.available.first().cloned()).ok_or("沒有可用的 Banked Reset")?;
-  *armed=Some(credit.id);drop(armed);record(&s,"banked_reset","Banked Reset 用盡後自動使用一次 · 已待命");
- }
+ let previous=s.armed.lock().unwrap().clone();
+ let next=if previous.is_some(){None}else{
+  let credit=s.credits.lock().unwrap().as_ref().and_then(|x|x.available.first().cloned())
+   .ok_or("沒有可用的 Banked Reset")?;
+  Some(credit.id)
+ };
+ storage::set_meta(&s.db.lock().unwrap(),"banked_armed",next.as_deref())?;
+ *s.armed.lock().unwrap()=next.clone();
+ record(&s,"banked_reset",if next.is_some(){"Banked Reset 用盡後自動使用一次 · 已待命"}else{"取消 Banked Reset 待命"});
  Ok(snapshot(&s))
 }
 #[tauri::command]async fn ntfy_test(s:tauri::State<'_,Arc<State>>)->Result<String,String>{
@@ -241,6 +255,12 @@ async fn consume(s:&State,allow_partial:bool,selected:Option<String>)->Result<()
  let msg=match &result{Ok(_)=>"已發送測試通知".into(),Err(e)=>format!("發送失敗: {e}")};
  *s.ntfy_status.lock().unwrap()=msg;
  result?;Ok(s.ntfy_status.lock().unwrap().clone())
+}
+#[tauri::command]fn native_notify_test(s:tauri::State<'_,Arc<State>>)->Result<String,String>{
+ if !s.settings.lock().unwrap().native_notify_enabled{return Err("請先開啟系統通知".into())}
+ s.app.notification().builder().title("Codex Tools 測試").body("Windows 系統通知已啟用")
+  .show().map_err(|e|e.to_string())?;
+ Ok("已送出測試通知".into())
 }
 #[tauri::command]fn get_history(s:tauri::State<'_,Arc<State>>)->Result<Vec<serde_json::Value>,String>{
  storage::history(&s.db.lock().unwrap())
@@ -288,15 +308,16 @@ async fn run_planned(s:&State,planned:engine::Next){
  replan(s);
 }
 pub fn run(){
- tauri::Builder::default().setup(|app|{
+ tauri::Builder::default().plugin(tauri_plugin_notification::init()).setup(|app|{
   let handle=app.handle().clone();
   let path=handle.path().app_data_dir()?;std::fs::create_dir_all(&path)?;
   let db=storage::open(&path.join("codexcredits.sqlite3")).map_err(std::io::Error::other)?;
   let settings=storage::get_settings(&db);
+  let armed=storage::get_meta(&db,"banked_armed");
   let state=Arc::new(State{
-   db:Mutex::new(db),settings:Mutex::new(settings),usage:Mutex::new(None),
+   app:handle.clone(),db:Mutex::new(db),settings:Mutex::new(settings),usage:Mutex::new(None),
    credits:Mutex::new(None),global:Mutex::new(None),last_credits:Mutex::new(0),last_global:Mutex::new(0),
-   ntfy_status:Mutex::new("尚未測試".into()),armed:Mutex::new(None),
+   ntfy_status:Mutex::new("尚未測試".into()),armed:Mutex::new(armed),
    engine:Mutex::new(engine::Engine::default()),error:Mutex::new(None),
    updating:tokio::sync::Mutex::new(()),action:tokio::sync::Mutex::new(()),
    login_busy:tokio::sync::Mutex::new(())
@@ -328,6 +349,7 @@ pub fn run(){
        if exhausted{
         // Disarm before redemption to guarantee one-shot even if response is ambiguous.
         *state.armed.lock().unwrap()=None;
+        let _=storage::set_meta(&state.db.lock().unwrap(),"banked_armed",None);
         if let Err(e)=consume(&state,false,Some(id)).await{record(&state,"error",&format!("自動 Banked Reset 未完成: {e}"));}
        }
       }
@@ -350,7 +372,7 @@ pub fn run(){
  })
  .invoke_handler(tauri::generate_handler![
   get_snapshot,save_settings,login_with_chatgpt,sign_out,refresh,manual_trigger,
-  banked_reset,toggle_banked_armed,ntfy_test,get_history,get_events
+  banked_reset,toggle_banked_armed,ntfy_test,native_notify_test,get_history,get_events
  ])
  .run(tauri::generate_context!()).expect("CodexCredits could not start");
 }

@@ -1,11 +1,40 @@
 # CodexCredits
 
-Windows-first Rust + Tauri 2 Codex quota monitor (MIT).
+Windows-first, local-first Rust/Tauri 2 adaptation of [android-codex-tools](https://github.com/ChrisTorng/android-codex-tools). Open source under MIT. **Android is the behavioral and visual reference.** This is a separate repository; the Android source is not modified.
 
-**Current phase: read-only monitoring MVP.** Includes Windows tray/close-to-hide/quit-to-stop, usage and history graph, SQLite persistence, Windows Credential Manager segmented token storage, browser OAuth PKCE login and refresh, configurable sampling and Rust scheduling *model*. Automatic Codex requests, Banked Reset and ntfy sending **are not yet implemented**. OAuth PKCE login/refresh is implemented, but live browser login with an actual account remains to be verified on Windows. This is not feature-parity with the original Android app.
+## Windows layout
 
-## Build on Windows
-Install Node.js 22+, Rust MSVC, Microsoft C++ Build Tools and Windows SDK.
+Default small **portrait window (430 × 760)**, resizable down to 340 × 520. Closing the window hides it to the system tray; the background monitor and enabled triggers continue while the process is alive. Quit from the tray stops them. No server or .NET runtime; Windows requires the system WebView2 runtime.
+
+The four tabs reproduce the Android UI hierarchy and Chinese captions: **● 狀態 / ◷ 排程 / ▥ 歷程 / ⚙ 設定**. All quota percentages and historical readings show **remaining percent, not used percent** (`100 - backend.used_percent`). The five-hour curve is blue and the weekly curve orange; solid lines show actual remaining quota, dashed lines show the current-window ideal. History separates yesterday/today and events.
+
+The status page contains the five-hour and weekly cards, next schedule, manual trigger, Banked Reset, and third-party Global Reset forecast with timeline-derived average/median estimates. The schedule page contains Off / Auto after reset / Custom anchor + follow-up mode, actual next in-process event, weekly/default anchor editors and today/tomorrow overrides. Settings contain ChatGPT browser OAuth PKCE with refresh, theme (system/light/dark), sample interval (10/15/30/60 minutes), and private optional ntfy topic generation/testing.
+
+## Download
+
+Open [Windows Build GitHub Actions](https://github.com/ChrisTorng/CodexCredits/actions/workflows/windows.yml), select the latest successful **main** build, then download `CodexCredits-Windows-x64` under **Artifacts**. **Unzip only once**: the artifact directly contains `CodexCredits.exe`, `README.md` and `LICENSE`; no nested ZIP.
+
+GitHub Actions checks TypeScript, runs Rust unit tests and compiles Windows release. A successful CI build is not a substitute for checking OAuth, real credit-consuming operations, OS tray interactions, Windows sleep/resume and platform notifications on a real machine.
+
+## Safety and execution
+
+- OAuth access and refresh tokens use OS secure credentials segmented to avoid the Windows Credential Manager 2,560-byte UTF-16 per-secret limit.
+- The app does **not** auto-start credit-consuming requests with default settings. The initial scheduling mode is Off. Switching to Auto/Custom requires an explicit confirmation in the UI.
+- Manual trigger consumes a minimal Codex request only after explicit user confirmation. The app rechecks quotas before calling it and avoids starting an already-confirmed active five-hour window.
+- Automatic scheduling only operates in the running process, unlike Android AlarmManager. No Task Scheduler, JobScheduler, background service or delayed catch-up after sleep/shutdown. The countdown uses actual backend five-hour reset rather than blindly adding five hours.
+- Banked Reset consumption requires user confirmation or explicit one-shot arming and is revalidated server-side immediately before use. The chosen Banked Reset one-shot arming state is retained in SQLite across app restarts, but is **never executed while the app is stopped**. It is cleared before a redemption attempt to prevent duplicate redemption if a network response is ambiguous.
+- ntfy has no hard-coded topic and is off by default. It only accepts private `https://ntfy.sh/<topic>` URL configuration.
+- ChatGPT Codex backend endpoints are not a guaranteed public stable API. Service compatibility, account entitlements, and applicability of service rules remain subject to change.
+
+## Known platform differences / remaining parity checks
+
+Unlike Android, Windows does not use Android exact alarms / Doze exemptions. Optional native Windows toast notifications use the cross-platform Tauri notification plugin; notification visibility depends on Windows app registration and notification policy, especially for portable EXEs. Optional ntfy is also available. The in-process Windows timer is best-effort and cannot execute while asleep or after Quit. A complete pixel-accurate Android Canvas rendering is not claimed; visual components reproduce the original layout, colors, and information semantics using HTML and ECharts.
+
+The desktop app supports the original core scheduling decisions, day overrides and banked operations, but live account-level side effects and edge cases still require end-to-end regression testing. See [the behavior parity matrix](docs/ANDROID_PARITY.md).
+
+## Windows development
+
+Install Node.js 22+, Rust MSVC and Microsoft C++ Build Tools / Windows SDK:
 
 ```powershell
 npm install
@@ -14,12 +43,4 @@ cargo test --manifest-path src-tauri/Cargo.toml
 npm run tauri build -- --no-bundle
 ```
 
-The [Windows GitHub Actions workflow](https://github.com/ChrisTorng/CodexCredits/actions/workflows/windows.yml) uploads one `CodexCredits-Windows-x64` artifact. Download and unzip it once to get `CodexCredits.exe`, `README.md` and `LICENSE`. The resulting portable EXE uses Windows WebView2, without .NET runtime.
-
-Security: OAuth access/refresh tokens stay in the OS credential vault in size-bounded chunks, not SQLite. No fixed ntfy ID. Scheduler is forced Off until automated requests are correctly implemented and tested. Closing the window keeps polling; Quit terminates app and stops polling. Backend Codex API is unofficial and subject to change. Original [android-codex-tools](https://github.com/ChrisTorng/android-codex-tools) repo is unchanged.
-
-MIT Copyright (c) 2026 ChrisTorng.
-
-## Login on Windows
-
-Press **使用 ChatGPT 登入**; complete the browser sign-in within five minutes. The local OAuth callback binds only to `127.0.0.1` on an OS-selected port and checks PKCE/state. The app stores its credential record in Windows Credential Manager as short chunks (the Windows single-item UTF-16 limit still applies). The application automatically refreshes tokens as needed; never paste credentials into GitHub issues. This is the same authorization client ID used by the original Android app, which relies on a service-specific OAuth interface that might change. The application has no remote callback server.
+Copyright (c) 2026 ChrisTorng. MIT license.

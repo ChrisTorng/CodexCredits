@@ -6,10 +6,10 @@ import "./style.css";
 type Mode="off"|"auto"|"custom";
 type Rule={id:string;enabled:boolean;days:boolean[];hour:number;minute:number;auto_count:number};
 type Override={enabled:boolean;rules:Rule[]};
-type Settings={mode:Mode;sampling_minutes:number;retention_days:number;rules:Rule[];overrides:Record<string,Override>;ntfy_topic:string;theme:string};
+type Settings={mode:Mode;sampling_minutes:number;retention_days:number;rules:Rule[];overrides:Record<string,Override>;ntfy_topic:string;theme:string;native_notify_enabled:boolean};
 type Usage={five_hour:number|null;weekly:number|null;five_reset:string|null;weekly_reset:string|null;primary_confirmed:boolean;plan:string;allowed:boolean;limit_reached:boolean;checked_at:string};
 type Credit={id:string;title:string;description:string;expires_at:string};
-type Snapshot={settings:Settings;usage:Usage|null;credits:{count:number;available:Credit[]}|null;global:{last_reset_at:string|null;age_days:number|null;p24:number|null;p48:number|null}|null;armed:boolean;ntfy_status:string;next:{at:number;kind:string;reason:string;auto_count:number}|null;error:string|null;signed_in:boolean};
+type Snapshot={settings:Settings;usage:Usage|null;credits:{count:number;available:Credit[]}|null;global:{last_reset_at:string|null;age_days:number|null;p24:number|null;p48:number|null;avg_days:number|null;median_days:number|null;median_estimate_at:string|null}|null;armed:boolean;ntfy_status:string;next:{at:number;kind:string;reason:string;auto_count:number}|null;error:string|null;signed_in:boolean};
 type Sample={at:string;five_hour:number|null;weekly:number|null;five_reset:string|null;weekly_reset:string|null};
 type Event={at:string;kind:string;detail:string};
 const $=(id:string)=>document.getElementById(id)!;
@@ -47,7 +47,7 @@ app.innerHTML=[
 '<div class="button-row"><button class="action" id="login">登入</button><button class="action" id="logout">登出</button></div>',
 '<div class="setting-row"><label for="theme">主題</label><select id="theme"><option value="system">跟隨系統</option><option value="light">淺色</option><option value="dark">深色</option></select></div>',
 '<div class="setting-row"><label for="sample">採樣間隔</label><select id="sample"><option value="10">10 分鐘</option><option value="15">15 分鐘</option><option value="30">30 分鐘</option><option value="60">60 分鐘</option></select></div>',
-'<h3>Windows 系統通知</h3><p class="note">Windows 通知中心整合尚未完成；ntfy 通知已可獨立使用。Android 的精準鬧鐘與電池白名單設定不適用 Windows。</p>',
+'<h3>Windows 系統通知</h3><div class="button-row"><label class="notification-switch"><input type="checkbox" id="native-toggle">開啟系統通知</label><button id="native-test" class="small">測試</button></div><p class="note" id="native-status">Windows 通知受到系統設定及可攜式執行限制；Android 精準鬧鐘與電池白名單設定不適用 Windows。</p>',
 '<h3>ntfy（選用，預設關閉）</h3><input id="ntfy" type="url" spellcheck="false" placeholder="未設定，按「建立」產生隨機專屬網址">',
 '<div class="button-row ntfy-actions"><button id="ntfy-new">建立</button><button id="ntfy-test">測試</button><button id="ntfy-copy">複製</button><button id="ntfy-save">儲存</button></div>',
 '<p class="note">最近發送：<span id="ntfy-status">未設定</span></p>',
@@ -176,6 +176,10 @@ function paintHistory(id:string,offset:number){
   return b>a?[[a,100-(a-s)/(e-s)*100],[b,100-(b-s)/(e-s)*100]]:[];
  };
  const u=snapshot?.usage;
+ const globalTime=snapshot?.global?.last_reset_at?new Date(snapshot.global.last_reset_at).getTime():null;
+ const globalMark=globalTime!=null&&globalTime>=start&&globalTime<end?
+  {symbol:["none","none"],silent:true,label:{show:true,formatter:"Global Reset",fontSize:9},
+   lineStyle:{type:"dashed",color:"#999",width:1},data:[{xAxis:globalTime}]}:undefined;
  const palette=[["5 小時","#2f80ed"],["週配額","#e89134"]] as const;
  chart.setOption({
   animation:false,backgroundColor:"transparent",
@@ -188,7 +192,7 @@ function paintHistory(id:string,offset:number){
   series:[
     {name:"5 小時理想",type:"line",data:u?.primary_confirmed?ideal(u.five_reset,5):[],showSymbol:false,silent:true,lineStyle:{color:palette[0][1],type:"dashed",width:1}},
     {name:"每週理想",type:"line",data:ideal(u?.weekly_reset,168),showSymbol:false,silent:true,lineStyle:{color:palette[1][1],type:"dashed",width:1}},
-    {name:"5 小時",type:"line",data:actual("five_hour"),showSymbol:false,lineStyle:{color:palette[0][1],width:2},itemStyle:{color:palette[0][1]}},
+    {name:"5 小時",type:"line",data:actual("five_hour"),showSymbol:false,lineStyle:{color:palette[0][1],width:2},itemStyle:{color:palette[0][1]},markLine:globalMark},
     {name:"週配額",type:"line",data:actual("weekly"),showSymbol:false,lineStyle:{color:palette[1][1],width:2},itemStyle:{color:palette[1][1]}}
   ]
  },true);
@@ -220,9 +224,15 @@ function render(){
  $("reset-action").textContent="Banked Reset ×"+available+(s.armed?" · 待命":"");
  ($("reset-action") as HTMLButtonElement).hidden=available<=0&&!s.armed;
  const first=credits?.available[0];
- $("reset-expiry").textContent=s.armed?"用盡後自動重置"+(first?.expires_at?" · 到期 "+fdate(first.expires_at):""):(first?.expires_at?"到期 "+fdate(first.expires_at):"");
+ const expiries=(credits?.available??[]).map(x=>x.expires_at).filter(Boolean).map(x=>fdate(x)).join(" · ");
+ $("reset-expiry").textContent=(s.armed?"用盡後自動重置":"")+(expiries?(s.armed?" · ":"")+"到期 "+expiries:"");
  const global=s.global;
- $("global-reset").textContent=global?.last_reset_at?"上次 "+fdate(global.last_reset_at)+(global.age_days!=null?" · 已 "+global.age_days.toFixed(1)+" 天":"")+(global.p24!=null?" · 24h "+global.p24+"%":"")+(global.p48!=null?" / 48h "+global.p48+"%":""):"尚無資料 · codex-reset.com";
+ $("global-reset").textContent=global?.last_reset_at?
+  "上次 "+fdate(global.last_reset_at)+(global.age_days!=null?" · 已 "+global.age_days.toFixed(1)+" 天":"")+
+  (global.median_days!=null&&global.avg_days!=null?
+    "\n近期間隔 均 "+global.avg_days.toFixed(1)+" 天 / 中 "+global.median_days.toFixed(1)+" 天 · 推估 "+fdate(global.median_estimate_at):"")+
+  (global.p24!=null||global.p48!=null?" · "+(global.p24!=null?"24h "+global.p24+"%":"")+(global.p48!=null?" / 48h "+global.p48+"%":""):"")
+  :"尚無資料 · codex-reset.com";
  ($("mode") as HTMLSelectElement).value=mode;
  $("alarm").textContent=s.next?fdate(new Date(s.next.at*1000).toISOString())+" · "+s.next.reason+"\nAlarm：桌面程式內執行 · 保底 Job：不適用 Windows":"尚未排程\nAlarm：未設定 · 保底 Job：不適用 Windows";
  $("schedule-preview").textContent=mode==="off"?"排程已關閉":mode==="auto"?"下一次以目前 quota reset 為基準":"下一錨點："+(s.next?fdate(new Date(s.next.at*1000).toISOString()):"尚未排程");
@@ -234,6 +244,9 @@ function render(){
  $("settings-account").textContent=s.signed_in?"已登入":"尚未登入";
  ($("sample") as HTMLSelectElement).value=String(s.settings.sampling_minutes);
  ($("theme") as HTMLSelectElement).value=s.settings.theme;
+ ($("native-toggle") as HTMLInputElement).checked=s.settings.native_notify_enabled;
+ $("native-status").textContent=s.settings.native_notify_enabled?"已啟用。通知是否顯示仍受 Windows 系統設定影響。":"尚未啟用。Windows 可攜式版本的通知需在系統設定允許。";
+ ($("native-test") as HTMLButtonElement).disabled=!s.settings.native_notify_enabled;
  const topic=$("ntfy") as HTMLInputElement;
  if(document.activeElement!==topic){topic.value=s.settings.ntfy_topic;}
  $("ntfy-status").textContent=s.settings.ntfy_topic?(s.ntfy_status||"尚未測試"):"未設定";
@@ -313,6 +326,9 @@ async function settingsPatch(patch:Partial<Settings>){
  catch(e){toast(String(e));}
 }
 $("theme").onchange=()=>{void settingsPatch({theme:($("theme") as HTMLSelectElement).value});};
+$("native-toggle").onchange=()=>{void settingsPatch({native_notify_enabled:($("native-toggle") as HTMLInputElement).checked});};
+$("native-test").onclick=async()=>{try{toast(await call<string>("native_notify_test"));}catch(e){toast("系統通知失敗："+String(e))}};
+
 $("sample").onchange=()=>{void settingsPatch({sampling_minutes:Number(($("sample") as HTMLSelectElement).value)});};
 $("login").onclick=async()=>{
  const b=$("login") as HTMLButtonElement;b.disabled=true;toast("請在瀏覽器完成 ChatGPT 登入（5 分鐘內）");

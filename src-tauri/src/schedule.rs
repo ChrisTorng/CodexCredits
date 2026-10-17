@@ -26,9 +26,10 @@ pub struct Settings {
  #[serde(default)]pub overrides:BTreeMap<String,Override>,
  #[serde(default)]pub ntfy_topic:String,
  #[serde(default="default_theme")]pub theme:String,
+ #[serde(default)]pub native_notify_enabled:bool,
 }
 impl Default for Settings{
- fn default()->Self{Self{mode:Mode::Off,sampling_minutes:10,retention_days:8,rules:vec![Rule::default()],overrides:BTreeMap::new(),ntfy_topic:String::new(),theme:"system".into()}}
+ fn default()->Self{Self{mode:Mode::Off,sampling_minutes:10,retention_days:8,rules:vec![Rule::default()],overrides:BTreeMap::new(),ntfy_topic:String::new(),theme:"system".into(),native_notify_enabled:false}}
 }
 impl Settings{
  pub fn valid(&self)->bool{
@@ -36,9 +37,10 @@ impl Settings{
   && (1..=3650).contains(&self.retention_days)
   && self.rules.len()<=100
   && self.rules.iter().all(Rule::valid)
+  && conflict_ids(&self.rules,true).is_empty()
   && self.overrides.len()<=32
   && self.overrides.iter().all(|(date,ov)|NaiveDate::parse_from_str(date,"%Y-%m-%d").is_ok()
-      &&ov.rules.len()<=100 &&ov.rules.iter().all(Rule::valid))
+      &&ov.rules.len()<=100 &&ov.rules.iter().all(Rule::valid) &&(!ov.enabled||conflict_ids(&ov.rules,false).is_empty()))
   &&["system","light","dark"].contains(&self.theme.as_str())
   && (self.ntfy_topic.is_empty() || ntfy_valid(&self.ntfy_topic))
  }
@@ -73,22 +75,54 @@ fn ntfy_valid(s:&str)->bool{
 pub fn next_anchor(after:DateTime<Local>,rules:&[Rule])->Option<DateTime<Local>>{
  let mut s=Settings::default();s.rules=rules.to_vec();s.next_slot(after).map(|(date,_)|date)
 }
-pub fn safe_followups(target:&Rule,rules:&[Rule])->u8{
+pub fn safe_followups(target:&Rule,rules:&[Rule])->u8{max_safe_count(target,rules,true)}
+pub fn max_safe_count(target:&Rule,rules:&[Rule],weekly:bool)->u8{
  if !target.enabled||!target.valid(){return 0}
+ let period=if weekly{10080}else{1440};
  let mut starts=Vec::new();
  for r in rules.iter().filter(|r|r.enabled&&r.valid()){
-  for day in 0..7{if r.days[day]{starts.push(day*1440+r.hour as usize*60+r.minute as usize);}}
+  for d in 0..(if weekly{7}else{1}){
+   if weekly&&!r.days[d]{continue;}
+   starts.push(d*1440+r.hour as usize*60+r.minute as usize);
+  }
  }
  let mut min_gap=usize::MAX;
- for day in 0..7{
-  if !target.days[day]{continue;}
-  let t=day*1440+target.hour as usize*60+target.minute as usize;
-  for &s in &starts{
-   let mut gap=(s+10080-t)%10080;if gap==0{gap=10080;}
+ for d in 0..(if weekly{7}else{1}){
+  if weekly&&!target.days[d]{continue;}
+  let time=d*1440+target.hour as usize*60+target.minute as usize;
+  for &start in &starts{
+   let mut gap=(start+period-time)%period;
+   if gap==0{gap=period;}
    min_gap=min_gap.min(gap);
   }
  }
  if min_gap==usize::MAX{3}else{(min_gap/300).saturating_sub(1).min(6) as u8}
+}
+pub fn conflict_ids(rules:&[Rule],weekly:bool)->Vec<String>{
+ let period=if weekly{10080usize}else{1440usize};
+ let mut bad=Vec::<String>::new();
+ let mut occurrences:Vec<(&str,usize)>=Vec::new();
+ for r in rules.iter().filter(|r|r.enabled&&r.valid()){
+  if r.auto_count>max_safe_count(r,rules,weekly){bad.push(r.id.clone());}
+  for d in 0..(if weekly{7}else{1}){
+   if weekly&&!r.days[d]{continue;}
+   let anchor=d*1440+r.hour as usize*60+r.minute as usize;
+   for index in 0..=r.auto_count{
+    occurrences.push((&r.id,(anchor+index as usize*300)%period));
+   }
+  }
+ }
+ for (i,a) in occurrences.iter().enumerate(){
+  for b in occurrences.iter().skip(i+1){
+   if a.0==b.0{continue;}
+   let distance=a.1.abs_diff(b.1);
+   if distance.min(period-distance)<300{
+    if !bad.iter().any(|id|id==a.0){bad.push(a.0.into());}
+    if !bad.iter().any(|id|id==b.0){bad.push(b.0.into());}
+   }
+  }
+ }
+ bad
 }
 #[cfg(test)]mod tests{
  use super::*;
@@ -96,5 +130,11 @@ pub fn safe_followups(target:&Rule,rules:&[Rule])->u8{
  #[test]fn daily_three(){let r=Rule::default();assert_eq!(safe_followups(&r,&[r.clone()]),3);}
  #[test]fn next_anchor_future(){let s=Settings::default();assert!(s.next_slot(Local::now()).unwrap().0>Local::now());}
  #[test]fn overrides_suppress_defaults(){let mut s=Settings::default();let day=Local::now().date_naive();s.overrides.insert(day.to_string(),Override{enabled:true,rules:vec![]});assert!(s.rules_for_date(day).is_empty());}
+ #[test]fn overlapping_anchors_rejected(){
+  let mut s=Settings::default();
+  let mut duplicate=Rule::default();duplicate.id="overlap".into();duplicate.hour=7;
+  s.rules.push(duplicate);
+  assert!(!s.valid());
+ }
  #[test]fn topic_validation(){let mut s=Settings::default();s.ntfy_topic="https://ntfy.sh/codex-abc".into();assert!(s.valid());s.ntfy_topic="http://localhost/a".into();assert!(!s.valid());}
 }
