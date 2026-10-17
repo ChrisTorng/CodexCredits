@@ -268,6 +268,13 @@ async fn consume(s:&State,allow_partial:bool,selected:Option<String>)->Result<()
 #[tauri::command]fn get_events(s:tauri::State<'_,Arc<State>>)->Result<Vec<serde_json::Value>,String>{
  storage::events(&s.db.lock().unwrap())
 }
+fn defer_scheduled_retry(s:&State,planned:&engine::Next,seconds:i64){
+ let mut e=s.engine.lock().unwrap();
+ e.next=Some(engine::Next{
+  at:now()+seconds,kind:planned.kind,auto_count:planned.auto_count,
+  reason:format!("失敗後 {} 分鐘再檢查",seconds/60),
+ });
+}
 async fn run_planned(s:&State,planned:engine::Next){
  let mode=s.settings.lock().unwrap().mode.clone();
  if mode==schedule::Mode::Off{return;}
@@ -277,7 +284,7 @@ async fn run_planned(s:&State,planned:engine::Next){
  }
  // Re-check server state on every scheduled action.
  let quota=match refresh_internal(s,false).await{
-  Ok(v)=>v,Err(e)=>{record(s,"error",&format!("排程查詢失敗: {e}"));replan(s);return}
+  Ok(v)=>v,Err(e)=>{record(s,"error",&format!("排程查詢失敗: {e}"));defer_scheduled_retry(s,&planned,900);return}
  };
  if mode==schedule::Mode::Custom&&engine::confirmed(&quota,now()){
   let remaining=engine::reset_timestamp(quota.five_reset.as_ref()).unwrap_or(now())-now();
@@ -299,7 +306,9 @@ async fn run_planned(s:&State,planned:engine::Next){
  if let Err(e)=trigger(s,followups,"排程").await{
   record(s,"error",&format!("排程觸發失敗: {e}"));
   notify(s,"Codex 排程錯誤",&e).await;
-  replan(s);
+  // A network error after POST cannot prove that the server did not
+  // accept the trigger. Back off rather than immediately retrying.
+  defer_scheduled_retry(s,&planned,900);
   return;
  }
  if planned.kind==engine::Kind::Chain&&followups==0{

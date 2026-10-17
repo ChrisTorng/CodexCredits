@@ -49,7 +49,9 @@ pub fn next_event(settings:&Settings,usage:Option<&Usage>,engine:&Engine,now:i64
    let (at,reason)=if confirmed(u,now){
     (reset_timestamp(u.five_reset.as_ref()).unwrap_or(now)+RESET_GRACE_SEC,"5 小時視窗重置後")
    }else if u.weekly.is_some_and(|p|p>=100.){
-    (reset_timestamp(u.weekly_reset.as_ref())?.max(now)+RESET_GRACE_SEC,"週配額重置後")
+    let reset=reset_timestamp(u.weekly_reset.as_ref())?;
+    if reset>now {(reset+RESET_GRACE_SEC,"週配額重置後")}
+    else{(now+15*60,"週配額仍未恢復，15 分鐘後再確認")}
    }else if !u.allowed{
     (now+15*60,"等待伺服器允許觸發")
    }else{(now+15,"尚未確認 5 小時視窗，準備觸發")};
@@ -91,4 +93,9 @@ pub fn is_stale(now:i64,at:i64)->bool{now-at>90}
  }
  #[test]fn guard_blocks_weekly_exhaustion(){let u=Usage{allowed:true,weekly:Some(100.),..Usage::default()};assert!(can_trigger(&u,0).is_err());}
  #[test]fn stale_event_is_not_replayed(){assert!(is_stale(200,1));assert!(!is_stale(100,90));}
+ #[test]fn exhausted_weekly_retry_is_rate_limited(){let mut s=Settings::default();s.mode=Mode::Auto;
+  let now=Utc::now().timestamp();
+  let u=Usage{allowed:true,weekly:Some(100.),weekly_reset:Some(DateTime::<Utc>::from_timestamp(now-100,0).unwrap().to_rfc3339()),..Usage::default()};
+  assert_eq!(next_event(&s,Some(&u),&Engine::default(),now).unwrap().at,now+900);
+ }
 }
