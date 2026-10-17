@@ -1,5 +1,6 @@
 import {invoke} from "@tauri-apps/api/core";
 import {listen} from "@tauri-apps/api/event";
+import {isPermissionGranted,requestPermission} from "@tauri-apps/plugin-notification";
 import * as echarts from "echarts";
 import "./style.css";
 
@@ -47,7 +48,7 @@ app.innerHTML=[
 '<div class="button-row"><button class="action" id="login">登入</button><button class="action" id="logout">登出</button></div>',
 '<div class="setting-row"><label for="theme">主題</label><select id="theme"><option value="system">跟隨系統</option><option value="light">淺色</option><option value="dark">深色</option></select></div>',
 '<div class="setting-row"><label for="sample">採樣間隔</label><select id="sample"><option value="10">10 分鐘</option><option value="15">15 分鐘</option><option value="30">30 分鐘</option><option value="60">60 分鐘</option></select></div>',
-'<h3>Windows 系統通知</h3><div class="button-row"><label class="notification-switch"><input type="checkbox" id="native-toggle">開啟系統通知</label><button id="native-test" class="small">測試</button></div><p class="note" id="native-status">Windows 通知受到系統設定及可攜式執行限制；Android 精準鬧鐘與電池白名單設定不適用 Windows。</p>',
+'<h3>Windows 系統通知</h3><div class="button-row"><label class="notification-switch"><input type="checkbox" id="native-toggle">開啟系統通知</label><button id="native-permission" class="small" hidden>允許通知</button></div><p class="note" id="native-status">正在檢查通知權限…</p>',
 '<h3>ntfy（選用，預設關閉）</h3><input id="ntfy" type="url" spellcheck="false" placeholder="未設定，按「建立」產生隨機專屬網址">',
 '<div class="button-row ntfy-actions"><button id="ntfy-new">建立</button><button id="ntfy-test">測試</button><button id="ntfy-copy">複製</button><button id="ntfy-save">儲存</button></div>',
 '<p class="note">最近發送：<span id="ntfy-status">未設定</span></p>',
@@ -68,6 +69,8 @@ let samples:Sample[]=[];
 let events:Event[]=[];
 let page="status";
 let theme="system";
+let notificationPermission:boolean|null=null;
+let notificationPermissionError="";
 let nextMessages:Array<string>=[];
 let editing:"weekly"|"today"|"tomorrow"="weekly";
 let draft:Rule[]=[];
@@ -108,6 +111,7 @@ const call=async<T>(name:string,args?:Record<string,unknown>):Promise<T>=>invoke
 
 function showPage(name:string){
  page=name;
+ if(name==="settings")void refreshNotificationPermission();
  for(const btn of Array.from(document.querySelectorAll<HTMLButtonElement>(".tab"))){
   const selected=btn.dataset.tab===name;
   btn.classList.toggle("active",selected);btn.setAttribute("aria-selected",String(selected));
@@ -127,6 +131,25 @@ function applyTheme(value:string){
  draw();
 }
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change",()=>{if(theme==="system")applyTheme(theme)});
+// Apply the OS palette before settings load. The default setting is already
+// "system", so a change-only check in render() cannot perform this first step.
+applyTheme("system");
+function renderNotificationStatus(){
+ if(!snapshot)return;
+ const optedIn=snapshot.settings.native_notify_enabled;
+ const permission=notificationPermission===true?"系統權限：允許":
+                  notificationPermission===false?"系統權限：未允許":"系統權限：尚未確認";
+ const portableNote="Windows 原生通知須使用安裝版（Setup EXE）；免安裝版不保證能顯示通知。";
+ $("native-status").textContent=(optedIn?"程式通知已開啟。":"程式通知已關閉。")+
+   " "+permission+"。 "+portableNote+
+   (notificationPermissionError?" 查詢錯誤："+notificationPermissionError:"");
+ ($("native-permission") as HTMLButtonElement).hidden=notificationPermission!==false||!optedIn;
+}
+async function refreshNotificationPermission(){
+ try{notificationPermission=await isPermissionGranted();notificationPermissionError="";}
+ catch(e){notificationPermission=null;notificationPermissionError=String(e);}
+ renderNotificationStatus();
+}
 function chartPalette(){return theme==="dark"||(theme==="system"&&matchMedia("(prefers-color-scheme: dark)").matches)
  ?{text:"#a6acb7",grid:"#3d424b",bg:"#1f2227"}:{text:"#737983",grid:"#e2e5ea",bg:"#ffffff"};}
 function paintQuota(id:string,used:number|null|undefined,reset:string|null|undefined,weekly:boolean,confirmed:boolean){
@@ -245,8 +268,7 @@ function render(){
  ($("sample") as HTMLSelectElement).value=String(s.settings.sampling_minutes);
  ($("theme") as HTMLSelectElement).value=s.settings.theme;
  ($("native-toggle") as HTMLInputElement).checked=s.settings.native_notify_enabled;
- $("native-status").textContent=s.settings.native_notify_enabled?"已啟用。通知是否顯示仍受 Windows 系統設定影響。":"尚未啟用。Windows 可攜式版本的通知需在系統設定允許。";
- ($("native-test") as HTMLButtonElement).disabled=!s.settings.native_notify_enabled;
+ renderNotificationStatus();
  const topic=$("ntfy") as HTMLInputElement;
  if(document.activeElement!==topic){topic.value=s.settings.ntfy_topic;}
  $("ntfy-status").textContent=s.settings.ntfy_topic?(s.ntfy_status||"尚未測試"):"未設定";
@@ -326,8 +348,20 @@ async function settingsPatch(patch:Partial<Settings>){
  catch(e){toast(String(e));}
 }
 $("theme").onchange=()=>{void settingsPatch({theme:($("theme") as HTMLSelectElement).value});};
-$("native-toggle").onchange=()=>{void settingsPatch({native_notify_enabled:($("native-toggle") as HTMLInputElement).checked});};
-$("native-test").onclick=async()=>{try{toast(await call<string>("native_notify_test"));}catch(e){toast("系統通知失敗："+String(e))}};
+$("native-toggle").onchange=async()=>{
+ const enabled=($("native-toggle") as HTMLInputElement).checked;
+ if(enabled&&notificationPermission===false){
+  try{notificationPermission=(await requestPermission())==="granted";}
+  catch(e){notificationPermissionError=String(e);}
+ }
+ await settingsPatch({native_notify_enabled:enabled});
+ await refreshNotificationPermission();
+};
+$("native-permission").onclick=async()=>{
+ try{notificationPermission=(await requestPermission())==="granted";notificationPermissionError="";}
+ catch(e){notificationPermissionError=String(e);}
+ renderNotificationStatus();
+};
 
 $("sample").onchange=()=>{void settingsPatch({sampling_minutes:Number(($("sample") as HTMLSelectElement).value)});};
 $("login").onclick=async()=>{
@@ -475,5 +509,20 @@ $("rule-save").onclick=async()=>{
 window.addEventListener("resize",()=>{Object.values(charts).forEach(c=>c.resize());draw();});
 const obs=new ResizeObserver(()=>{Object.values(charts).forEach(c=>c.resize());});
 obs.observe($("app"));
-void listen("credits:updated",async()=>{await load();await loadHistory();});
-void (async()=>{await load();await loadHistory();})();
+void listen("credits:updated",async()=>{await Promise.allSettled([load(),loadHistory()]);});
+type LocalState={snapshot:Snapshot;history:Sample[];events:Event[]};
+async function initialize(){
+ // Load persisted samples and events first, independent of OAuth, quota API,
+ // or slow startup network operations. Never require "更新配額" to restore history.
+ try{
+  const cached=await call<LocalState>("get_local_state");
+  snapshot=cached.snapshot;samples=cached.history;events=cached.events;
+  render();
+ }catch(e){
+  toast("讀取本機資料失敗："+String(e));
+  await Promise.allSettled([loadHistory(),load()]);
+ }
+ requestAnimationFrame(()=>{Object.values(charts).forEach(c=>c.resize());draw();});
+ await refreshNotificationPermission();
+}
+void initialize();

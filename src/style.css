@@ -6,6 +6,13 @@
  font-family:Roboto,"Segoe UI","Noto Sans TC","Microsoft JhengHei",sans-serif;
  font-synthesis:none;font-size:14px;font-weight:400;
 }
+@media (prefers-color-scheme: dark){
+ :root:not([data-theme]){
+  color-scheme:dark;
+  --page:#121417;--card:#1f2227;--border:#3d424b;--text:#ebedf1;--sub:#a6acb7;
+  --muted:#5c616a;--warning:#f4ac4c;--banked:#443a22;--banked-border:#ae8536;--button:#292e35;
+ }
+}
 :root[data-theme=dark]{
  color-scheme:dark;
  --page:#121417;--card:#1f2227;--border:#3d424b;--text:#ebedf1;--sub:#a6acb7;
@@ -119,4 +126,5 @@ button.primary{color:#fff;background:var(--blue);border-color:var(--blue)}
 
 .notification-switch{flex:1;display:flex;align-items:center;gap:8px;min-width:0;font-size:14px}
 .notification-switch input{width:18px;height:18px;min-height:18px;flex:0 0 auto}
-#native-test{flex:0 0 78px}
+#native-permission{flex:0 0 88px}
+#native-permission[hidden]{display:none}

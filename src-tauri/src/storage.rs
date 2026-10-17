@@ -79,6 +79,24 @@ pub fn events(db:&Connection)->Result<Vec<serde_json::Value>,String>{
 }
 #[cfg(test)]mod tests{
  use super::*;
+ #[test]fn persisted_history_survives_reopening_database(){
+  let path=std::env::temp_dir().join(format!("codexcredits-history-test-{}.sqlite3",uuid::Uuid::new_v4()));
+  {
+   let db=open(&path).unwrap();
+   add_sample(&db,Some(37.),Some(56.),Some("2026-10-18T00:00:00Z"),None).unwrap();
+   event(&db,"restart","本機歷程需在重新啟動後保留").unwrap();
+  }
+  {
+   let db=open(&path).unwrap();
+   let rows=history(&db).unwrap();
+   let logs=events(&db).unwrap();
+   assert_eq!(rows.len(),1);
+   assert_eq!(rows[0]["five_hour"],37.0);
+   assert_eq!(logs.len(),1);
+   assert_eq!(logs[0]["kind"],"restart");
+  }
+  let _=std::fs::remove_file(path);
+ }
  #[test]fn roundtrip(){
   let db=Connection::open_in_memory().unwrap();
   db.execute_batch("CREATE TABLE kv(key TEXT PRIMARY KEY,value TEXT NOT NULL);CREATE TABLE samples(id INTEGER PRIMARY KEY,at TEXT,five_hour REAL,weekly REAL,five_reset TEXT,weekly_reset TEXT);CREATE TABLE events(id INTEGER PRIMARY KEY,at TEXT,kind TEXT,detail TEXT);").unwrap();

@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@tauri-apps/api": "^2.8.0",
+    "@tauri-apps/plugin-notification": "^2.3.0",
     "echarts": "^6.0.0"
   },
   "devDependencies": {

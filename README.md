@@ -12,7 +12,7 @@ The status page contains the five-hour and weekly cards, next schedule, manual t
 
 ## Download
 
-Open [Windows Build GitHub Actions](https://github.com/ChrisTorng/CodexCredits/actions/workflows/windows.yml), select the latest successful **main** build, then download `CodexCredits-Windows-x64` under **Artifacts**. **Unzip only once**: the artifact directly contains `CodexCredits.exe`, `README.md` and `LICENSE`; no nested ZIP.
+Open [Windows Build GitHub Actions](https://github.com/ChrisTorng/CodexCredits/actions/workflows/windows.yml), select the latest successful **main** build, then download `CodexCredits-Windows-x64` under **Artifacts**. **Unzip only once**: the artifact directly contains the portable `CodexCredits.exe`, the Windows `*-setup.exe` installer, `README.md` and `LICENSE`; no nested ZIP. **Choose the setup installer for Windows native notifications**; the portable EXE remains available for users who do not need native Windows toasts.
 
 GitHub Actions checks TypeScript, runs Rust unit tests and compiles Windows release. A successful CI build is not a substitute for checking OAuth, real credit-consuming operations, OS tray interactions, Windows sleep/resume and platform notifications on a real machine.
 
@@ -28,7 +28,7 @@ GitHub Actions checks TypeScript, runs Rust unit tests and compiles Windows rele
 
 ## Known platform differences / remaining parity checks
 
-Unlike Android, Windows does not use Android exact alarms / Doze exemptions. Optional native Windows toast notifications use the cross-platform Tauri notification plugin; notification visibility depends on Windows app registration and notification policy, especially for portable EXEs. Optional ntfy is also available. The in-process Windows timer is best-effort and cannot execute while asleep or after Quit. A complete pixel-accurate Android Canvas rendering is not claimed; visual components reproduce the original layout, colors, and information semantics using HTML and ECharts.
+Unlike Android, Windows does not use Android exact alarms / Doze exemptions. Windows native notifications use the Tauri notification plugin and require an **installed Windows app** (NSIS setup supplies the Start Menu identity). A portable EXE does not have the required Windows app registration, so native toast delivery is not guaranteed even if the OS permission check reports granted. The Settings page checks plugin notification permission automatically and requests permission when needed; a manual test is not required to configure notifications. Windows Focus Assist and system notification policy can still suppress visual banners. Optional ntfy is also available. The in-process Windows timer is best-effort and cannot execute while asleep or after Quit. A complete pixel-accurate Android Canvas rendering is not claimed; visual components reproduce the original layout, colors, and information semantics using HTML and ECharts.
 
 The desktop app supports the original core scheduling decisions, day overrides and banked operations, but live account-level side effects and edge cases still require end-to-end regression testing. See [the behavior parity matrix](docs/ANDROID_PARITY.md).
 
@@ -44,3 +44,7 @@ npm run tauri build -- --no-bundle
 ```
 
 Copyright (c) 2026 ChrisTorng. MIT license.
+
+## UI startup and persisted history
+
+The system theme is applied on the first paint, even when the saved setting equals the default `system`; it also follows live OS theme changes. Initial UI bootstrap hydrates quota history and events directly from local SQLite **before** any online refresh. The startup background refresh broadcasts a UI update, so relaunching the app never requires a manual quota refresh to display existing charts. SQLite data is retained under the app data directory and persists after quitting or installing a newer version.

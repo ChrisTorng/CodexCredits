@@ -30,6 +30,12 @@ struct State{
  login_busy:tokio::sync::Mutex<()>,
 }
 #[derive(Serialize)]
+struct LocalState{
+ snapshot:Snapshot,
+ history:Vec<serde_json::Value>,
+ events:Vec<serde_json::Value>,
+}
+#[derive(Serialize)]
 struct Snapshot{
  settings:schedule::Settings,
  usage:Option<api::Usage>,
@@ -262,6 +268,13 @@ async fn consume(s:&State,allow_partial:bool,selected:Option<String>)->Result<()
   .show().map_err(|e|e.to_string())?;
  Ok("已送出測試通知".into())
 }
+#[tauri::command]fn get_local_state(s:tauri::State<'_,Arc<State>>)->Result<LocalState,String>{
+ let (history,events)={
+  let db=s.db.lock().unwrap();
+  (storage::history(&db)?,storage::events(&db)?)
+ };
+ Ok(LocalState{snapshot:snapshot(&s),history,events})
+}
 #[tauri::command]fn get_history(s:tauri::State<'_,Arc<State>>)->Result<Vec<serde_json::Value>,String>{
  storage::history(&s.db.lock().unwrap())
 }
@@ -351,7 +364,13 @@ pub fn run(){
    }).build(app)?;
   tauri::async_runtime::spawn(async move{
    // First obtain a fresh quota after restart; never replay old persisted alarms.
-   if token().is_ok(){let _=refresh_internal(&state,true).await;}
+   if token().is_ok(){
+    if let Err(e)=refresh_internal(&state,true).await{
+     *state.error.lock().unwrap()=Some(e);
+    }
+    // The first refresh must update the UI as well, not only periodic polls.
+    let _=handle.emit("credits:updated",());
+   }
    let mut last_sample=now();
    loop{
     tokio::time::sleep(Duration::from_secs(2)).await;
@@ -389,7 +408,7 @@ pub fn run(){
  })
  .invoke_handler(tauri::generate_handler![
   get_snapshot,save_settings,login_with_chatgpt,sign_out,refresh,manual_trigger,
-  banked_reset,toggle_banked_armed,ntfy_test,native_notify_test,get_history,get_events
+  banked_reset,toggle_banked_armed,ntfy_test,native_notify_test,get_local_state,get_history,get_events
  ])
  .run(tauri::generate_context!()).expect("CodexCredits could not start");
 }
