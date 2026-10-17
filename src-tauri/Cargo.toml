@@ -33,3 +33,4 @@ webbrowser = "1"
 
 uuid = { version = "1", features = ["v4"] }
 tauri-plugin-notification = "=2.3.3"
+tauri-plugin-single-instance = "=2.3.2"

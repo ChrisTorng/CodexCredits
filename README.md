@@ -4,7 +4,7 @@ Windows-first, local-first Rust/Tauri 2 adaptation of [android-codex-tools](http
 
 ## Windows layout
 
-Default small **portrait window (430 × 760)**, resizable down to 340 × 520. Closing the window hides it to the system tray; the background monitor and enabled triggers continue while the process is alive. Quit from the tray stops them. No server or .NET runtime; Windows requires the system WebView2 runtime.
+Default small **portrait window (430 × 760)**, resizable down to 340 × 520. Closing the window hides it to the system tray; the background monitor and enabled triggers continue while the process is alive. Quit from the tray stops them. Starting a second process focuses the existing tray app instead of spawning duplicate monitoring or trigger loops. No server or .NET runtime; Windows requires the system WebView2 runtime.
 
 The four tabs reproduce the Android UI hierarchy and Chinese captions: **● 狀態 / ◷ 排程 / ▥ 歷程 / ⚙ 設定**. All quota percentages and historical readings show **remaining percent, not used percent** (`100 - backend.used_percent`). The five-hour curve is blue and the weekly curve orange; solid lines show actual remaining quota, dashed lines show the current-window ideal. History separates yesterday/today and events.
 

@@ -317,7 +317,15 @@ async fn run_planned(s:&State,planned:engine::Next){
  replan(s);
 }
 pub fn run(){
- tauri::Builder::default().plugin(tauri_plugin_notification::init()).setup(|app|{
+ tauri::Builder::default()
+ .plugin(tauri_plugin_single_instance::init(|app,_args,_cwd|{
+  if let Some(w)=app.get_webview_window("main"){
+   let _=w.show();
+   let _=w.set_focus();
+  }
+ }))
+ .plugin(tauri_plugin_notification::init())
+ .setup(|app|{
   let handle=app.handle().clone();
   let path=handle.path().app_data_dir()?;std::fs::create_dir_all(&path)?;
   let db=storage::open(&path.join("codexcredits.sqlite3")).map_err(std::io::Error::other)?;
