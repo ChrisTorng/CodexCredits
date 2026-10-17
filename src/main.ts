@@ -6,7 +6,7 @@ type Settings={mode:string;sampling_minutes:number;retention_days:number;ntfy_to
 type Usage={five_hour:number|null;weekly:number|null;five_reset:string|null;weekly_reset:string|null};
 type Snapshot={settings:Settings;usage:Usage|null;error:string|null;signed_in:boolean;next_anchor:string|null};
 const app=document.querySelector<HTMLDivElement>("#app")!;
-app.innerHTML=`<header><h1>CodexCredits</h1><small id="status">載入中</small></header><div class="cards"><article><h2>5 小時用量</h2><strong id="five">—</strong><small id="reset5"></small></article><article><h2>每週用量</h2><strong id="weekly">—</strong><small id="resetW"></small></article></div><section><button id="refresh">重新整理</button> <span id="msg"></span></section><section><h2>歷史圖表</h2><div id="chart"></div></section><section><h2>設定</h2><label>採樣分鐘 <input type="number" min="1" max="1440" id="minutes"></label><label>保留天數 <input type="number" min="1" max="3650" id="days"></label><button id="save">儲存</button></section><section><h2>登入</h2><p>目前只支援手動貼入 Access Token，保存在作業系統安全憑證庫。完整 OAuth 尚未實作。</p><input id="token" type="password" autocomplete="off" placeholder="Access token"><button id="signin">儲存 Token</button><button id="signout">登出</button></section><section><h2>排程預覽</h2><p id="next"></p><p>自動觸發配額與 ntfy 通知尚未實作，安全起見固定關閉。</p></section><footer>關閉視窗只隱藏到系統匣；透過系統匣「結束」會停止所有背景監測。</footer>`;
+app.innerHTML=`<header><h1>CodexCredits</h1><small id="status">載入中</small></header><div class="cards"><article><h2>5 小時用量</h2><strong id="five">—</strong><small id="reset5"></small></article><article><h2>每週用量</h2><strong id="weekly">—</strong><small id="resetW"></small></article></div><section><button id="refresh">重新整理</button> <span id="msg"></span></section><section><h2>歷史圖表</h2><div id="chart"></div></section><section><h2>設定</h2><label>採樣分鐘 <input type="number" min="1" max="1440" id="minutes"></label><label>保留天數 <input type="number" min="1" max="3650" id="days"></label><button id="save">儲存</button></section><section><h2>登入</h2><p>透過系統瀏覽器使用 ChatGPT 安全登入（OAuth PKCE），自動更新登入憑證。無須複製 Access Token。</p><button id="oauth">使用 ChatGPT 登入</button><button id="signout">登出</button></section><section><h2>排程預覽</h2><p id="next"></p><p>自動觸發配額與 ntfy 通知尚未實作，安全起見固定關閉。</p></section><footer>關閉視窗只隱藏到系統匣；透過系統匣「結束」會停止所有背景監測。</footer>`;
 const el=(id:string)=>document.getElementById(id)!;
 const chart=echarts.init(el("chart"));
 let snapshot:Snapshot|undefined;
@@ -32,6 +32,16 @@ async function history(){try{
  }catch(e){msg(String(e))}}
 el("refresh").onclick=async()=>{msg("更新中");try{await invoke("refresh");msg("更新完成");await load();await history()}catch(e){msg(String(e))}};
 el("save").onclick=async()=>{if(!snapshot)return;try{await invoke("save_settings",{settings:{...snapshot.settings,sampling_minutes:Number((el("minutes") as HTMLInputElement).value),retention_days:Number((el("days") as HTMLInputElement).value),mode:"off"}});msg("儲存完成");await load()}catch(e){msg(String(e))}};
-el("signin").onclick=async()=>{try{await invoke("set_access_token",{token:(el("token") as HTMLInputElement).value});(el("token") as HTMLInputElement).value="";msg("已儲存");await load()}catch(e){msg(String(e))}};
+el("oauth").onclick=async()=>{
+ const button=el("oauth") as HTMLButtonElement;button.disabled=true;
+ msg("請在瀏覽器完成 ChatGPT 登入（最多等候 5 分鐘）…");
+ try {
+  await invoke("login_with_chatgpt");
+  msg("ChatGPT 登入成功");await load();
+  try { await invoke("refresh");await load();await history(); }
+  catch(e){ msg("登入成功，但配額查詢失敗："+String(e)); }
+ }catch(e){msg("登入失敗："+String(e))}
+ finally{button.disabled=false}
+};
 el("signout").onclick=async()=>{try{await invoke("sign_out");msg("已登出");await load()}catch(e){msg(String(e))}};
 window.addEventListener("resize",()=>chart.resize());void listen("credits:updated",async()=>{await load();await history()});void load();void history();
