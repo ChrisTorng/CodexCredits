@@ -14,11 +14,12 @@
       {
         "label": "main",
         "title": "CodexCredits",
-        "width": 980,
-        "height": 720,
-        "minWidth": 460,
-        "minHeight": 500,
-        "center": true
+        "width": 430,
+        "height": 760,
+        "minWidth": 340,
+        "minHeight": 520,
+        "center": true,
+        "resizable": true
       }
     ],
     "security": {

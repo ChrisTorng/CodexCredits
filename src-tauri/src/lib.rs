@@ -3,86 +3,354 @@ mod schedule;
 mod storage;
 mod credentials;
 mod oauth;
+mod engine;
+
 use std::{sync::{Arc,Mutex},time::Duration};
+use serde::Serialize;
 use tauri::{AppHandle,Emitter,Manager,WindowEvent};
 use tauri::menu::{Menu,MenuItem};
 use tauri::tray::TrayIconBuilder;
-use serde::Serialize;
-struct State { db:Mutex<rusqlite::Connection>, settings:Mutex<schedule::Settings>, usage:Mutex<Option<api::Usage>>, error:Mutex<Option<String>>, updating:tokio::sync::Mutex<()>, login_busy:tokio::sync::Mutex<()> }
+
+struct State{
+ db:Mutex<rusqlite::Connection>,
+ settings:Mutex<schedule::Settings>,
+ usage:Mutex<Option<api::Usage>>,
+ credits:Mutex<Option<api::Credits>>,
+ global:Mutex<Option<api::Global>>,
+ last_credits:Mutex<i64>,
+ last_global:Mutex<i64>,
+ ntfy_status:Mutex<String>,
+ armed:Mutex<Option<String>>,
+ engine:Mutex<engine::Engine>,
+ error:Mutex<Option<String>>,
+ updating:tokio::sync::Mutex<()>,
+ action:tokio::sync::Mutex<()>,
+ login_busy:tokio::sync::Mutex<()>,
+}
 #[derive(Serialize)]
-struct Snapshot { settings:schedule::Settings, usage:Option<api::Usage>, error:Option<String>, signed_in:bool, next_anchor:Option<String> }
+struct Snapshot{
+ settings:schedule::Settings,
+ usage:Option<api::Usage>,
+ credits:Option<api::Credits>,
+ global:Option<api::Global>,
+ ntfy_status:String,
+ armed:bool,
+ next:Option<engine::Next>,
+ error:Option<String>,
+ signed_in:bool,
+}
+fn now()->i64{chrono::Utc::now().timestamp()}
 fn token()->Result<String,String>{credentials::load()}
 fn snapshot(s:&State)->Snapshot{
+ Snapshot{
+  settings:s.settings.lock().unwrap().clone(),
+  usage:s.usage.lock().unwrap().clone(),
+  credits:s.credits.lock().unwrap().clone(),
+  global:s.global.lock().unwrap().clone(),
+  ntfy_status:s.ntfy_status.lock().unwrap().clone(),
+  armed:s.armed.lock().unwrap().is_some(),
+  next:s.engine.lock().unwrap().next.clone(),
+  error:s.error.lock().unwrap().clone(),
+  signed_in:token().is_ok(),
+ }
+}
+fn record(s:&State,kind:&str,message:&str){
+ let _=storage::event(&s.db.lock().unwrap(),kind,message);
+}
+fn replan(s:&State){
  let settings=s.settings.lock().unwrap().clone();
- let next_anchor=schedule::next_anchor(chrono::Local::now(),&settings.rules).map(|v|v.to_rfc3339());
- Snapshot{settings,usage:s.usage.lock().unwrap().clone(),error:s.error.lock().unwrap().clone(),signed_in:token().is_ok(),next_anchor}
+ let usage=s.usage.lock().unwrap().clone();
+ let mut e=s.engine.lock().unwrap();
+ e.next=engine::next_event(&settings,usage.as_ref(),&e,now());
+}
+fn confirmed_primary(new:&api::Usage,prev:Option<&api::Usage>)->bool{
+ let new_used=new.five_hour.unwrap_or(0.);
+ if new_used>0.0001{return true;}
+ let Some(old)=prev else{return false};
+ let fresh=engine::reset_timestamp(new.five_reset.as_ref());
+ let previous=engine::reset_timestamp(old.five_reset.as_ref());
+ let timestamp=now();
+ let old_confirmed=old.primary_confirmed && previous.is_some_and(|r|r>timestamp)
+  && fresh.zip(previous).is_some_and(|(a,b)|(a-b).abs()<=120);
+ let elapsed=chrono::DateTime::parse_from_rfc3339(&old.checked_at)
+  .ok().map(|t|timestamp-t.timestamp()).unwrap_or(0).max(0);
+ let fixed=elapsed>=15&&fresh.zip(previous)
+  .is_some_and(|(a,b)|(a-b).abs()<=std::cmp::max(5,elapsed/4));
+ let natural_weekly=engine::reset_timestamp(old.weekly_reset.as_ref())
+  .is_some_and(|r|timestamp>=r-900&&timestamp<=r+3600);
+ let unexpected_weekly=old.weekly.zip(new.weekly).is_some_and(|(a,b)|a-b>2.)&&!natural_weekly;
+ !unexpected_weekly && (old_confirmed||fixed)
+}
+async fn refresh_internal(s:&State,force_aux:bool)->Result<api::Usage,String>{
+ let _guard=s.updating.lock().await;
+ let access=oauth::valid_access().await?;
+ let mut value=api::fetch_usage(&access.token,access.account_id.as_deref()).await?;
+ let before=s.usage.lock().unwrap().clone();
+ value.primary_confirmed=confirmed_primary(&value,before.as_ref());
+ {
+  let db=s.db.lock().unwrap();
+  storage::add_sample(&db,value.five_hour,value.weekly,value.five_reset.as_deref(),value.weekly_reset.as_deref())?;
+  let _=storage::cleanup(&db,s.settings.lock().unwrap().retention_days);
+ }
+ *s.usage.lock().unwrap()=Some(value.clone());
+ *s.error.lock().unwrap()=None;
+ replan(s);
+ let check_credits={let last=s.last_credits.lock().unwrap();force_aux||now()-*last>=1800};
+ if check_credits{
+  match api::fetch_credits(&access.token,access.account_id.as_deref()).await{
+   Ok(c)=>{
+    let selected={s.armed.lock().unwrap().clone()};
+    if let Some(selected)=selected{
+     if !c.available.iter().any(|x|x.id==selected){
+      *s.armed.lock().unwrap()=None;
+      record(s,"banked_reset","待命的 Banked Reset 已不可用，取消待命");
+     }
+    }
+    *s.credits.lock().unwrap()=Some(c);
+    *s.last_credits.lock().unwrap()=now();
+   }
+   Err(e)=>record(s,"warning",&format!("Banked Reset 查詢失敗: {e}")),
+  }
+ }
+ let check_global={let last=s.last_global.lock().unwrap();force_aux||now()-*last>=21600};
+ if check_global{
+  match api::global_reset().await{
+   Ok(value)=>{*s.global.lock().unwrap()=Some(value);*s.last_global.lock().unwrap()=now();}
+   Err(_)=>{*s.last_global.lock().unwrap()=now();}
+  }
+ }
+ Ok(value)
+}
+async fn notify(s:&State,title:&str,message:&str){
+ let url=s.settings.lock().unwrap().ntfy_topic.clone();
+ if !url.is_empty(){
+  let result=api::ntfy_send(&url,title,message).await;
+  *s.ntfy_status.lock().unwrap()=match result{
+   Ok(_)=>format!("已發送 · {title}"),
+   Err(e)=>format!("發送失敗: {e}")
+  };
+ }
+}
+async fn trigger(s:&State,followups:u8,kind:&str)->Result<(),String>{
+ let _action=s.action.lock().await;
+ let q=refresh_internal(s,false).await?;
+ engine::can_trigger(&q,now())?;
+ let access=oauth::valid_access().await?;
+ api::trigger_minimal(&access.token,access.account_id.as_deref()).await?;
+ tokio::time::sleep(Duration::from_secs(2)).await;
+ let mut after=refresh_internal(s,false).await?;
+ // An accepted trigger explicitly confirms the current 5-hour window.
+ after.primary_confirmed=after.five_reset.is_some();
+ *s.usage.lock().unwrap()=Some(after.clone());
+ record(s,"trigger",&format!("{kind}觸發成功"));
+ if followups>0&&after.primary_confirmed{
+  let reset=engine::reset_timestamp(after.five_reset.as_ref());
+  let mut e=s.engine.lock().unwrap();
+  e.chain_remaining=followups;
+  e.chain_reset=reset;
+ }
+ notify(s,"Codex 觸發成功",&format!("5h 剩餘 {:.0}%",100.-after.five_hour.unwrap_or(0.))).await;
+ replan(s);Ok(())
+}
+async fn consume(s:&State,allow_partial:bool,selected:Option<String>)->Result<(),String>{
+ let _action=s.action.lock().await;
+ let current=refresh_internal(s,true).await?;
+ let used=engine::exhausted(&current)||current.five_hour.is_some_and(|v|v>0.)
+  ||current.weekly.is_some_and(|v|v>0.);
+ if !(if allow_partial{used}else{engine::exhausted(&current)}){
+  return Err((if allow_partial{"配額尚未使用，不需要重置"}else{"5h 與週配額尚未用盡"}).into());
+ }
+ let access=oauth::valid_access().await?;
+ let c=api::fetch_credits(&access.token,access.account_id.as_deref()).await?;
+ let credit=c.available.iter().find(|c|selected.as_ref().is_none_or(|id|id==&c.id))
+  .ok_or("目前沒有可用的 Banked Reset")?;
+ if c.count<=0{return Err("Banked Reset 可用次數為 0".into())}
+ let windows=api::consume_credit(&access.token,access.account_id.as_deref(),&credit.id).await?;
+ if windows<=0{return Err("伺服器未重置任何配額視窗".into())}
+ *s.armed.lock().unwrap()=None;
+ tokio::time::sleep(Duration::from_secs(1)).await;
+ let _=refresh_internal(s,true).await;
+ record(s,"banked_reset",&format!("Banked Reset 已使用 · 重置 {windows} 個視窗"));
+ notify(s,"Codex Banked Reset 完成",&format!("已重置 {windows} 個配額視窗")).await;
+ replan(s);Ok(())
 }
 #[tauri::command]fn get_snapshot(s:tauri::State<'_,Arc<State>>)->Snapshot{snapshot(&s)}
-#[tauri::command]fn save_settings(s:tauri::State<'_,Arc<State>>,mut settings:schedule::Settings)->Result<Snapshot,String>{
- settings.mode=schedule::Mode::Off;
- {let db=s.db.lock().unwrap();storage::save_settings(&db,&settings)?;}
- *s.settings.lock().unwrap()=settings;Ok(snapshot(&s))
-}
-#[tauri::command]async fn set_access_token(s:tauri::State<'_,Arc<State>>,token:String)->Result<Snapshot,String>{
- let v=token.trim();if v.len()<12||v.len()>16384{return Err("無效 Token".into())}
- let _guard=s.updating.lock().await;
- credentials::save(v)?;Ok(snapshot(&s))
+#[tauri::command]fn save_settings(s:tauri::State<'_,Arc<State>>,settings:schedule::Settings)->Result<Snapshot,String>{
+ if !settings.valid(){return Err("設定不正確：請檢查排程、ntfy 網址與採樣間隔".into())}
+ if settings.mode!=schedule::Mode::Off&&token().is_err(){return Err("請先登入才能啟用自動排程".into())}
+ {
+  let db=s.db.lock().unwrap();storage::save_settings(&db,&settings)?;
+ }
+ let changed_mode=s.settings.lock().unwrap().mode!=settings.mode;
+ *s.settings.lock().unwrap()=settings;
+ if changed_mode{
+  let mut e=s.engine.lock().unwrap();e.chain_remaining=0;e.chain_reset=None;
+  record(&s,"mode","排程模式已變更");
+ }
+ replan(&s);Ok(snapshot(&s))
 }
 #[tauri::command]async fn login_with_chatgpt(app:AppHandle,s:tauri::State<'_,Arc<State>>)->Result<Snapshot,String>{
- let _busy=s.login_busy.try_lock().map_err(|_|"已有登入程序進行中")?;
+ let _busy=s.login_busy.try_lock().map_err(|_|"登入程序已進行中")?;
  let session=oauth::browser_login().await?;
- {
-  let _guard=s.updating.lock().await;
-  oauth::save_session(&session)?;
- }
+ {let _guard=s.updating.lock().await;oauth::save_session(&session)?;}
  *s.error.lock().unwrap()=None;
- let _=app.emit("credits:updated",());
- Ok(snapshot(&s))
+ record(&s,"login","ChatGPT 登入成功");
+ let _=app.emit("credits:updated",());Ok(snapshot(&s))
 }
 #[tauri::command]async fn sign_out(s:tauri::State<'_,Arc<State>>)->Result<Snapshot,String>{
  let _guard=s.updating.lock().await;
  credentials::sign_out()?;
- *s.usage.lock().unwrap()=None;
+ *s.usage.lock().unwrap()=None;*s.credits.lock().unwrap()=None;
+ *s.armed.lock().unwrap()=None;
+ {
+  let mut settings=s.settings.lock().unwrap();settings.mode=schedule::Mode::Off;
+  let copy=settings.clone();drop(settings);
+  storage::save_settings(&s.db.lock().unwrap(),&copy)?;
+ }
+ {let mut e=s.engine.lock().unwrap();e.chain_remaining=0;e.chain_reset=None;e.next=None;}
+ record(&s,"login","已登出；排程已關閉");
  Ok(snapshot(&s))
 }
-async fn update(s:&State)->Result<api::Usage,String>{
- let _lock=s.updating.lock().await;
- let access=oauth::valid_access().await?;
- let value=api::fetch_usage(&access.token,access.account_id.as_deref()).await?;
- {let db=s.db.lock().unwrap();storage::add_sample(&db,value.five_hour,value.weekly,value.five_reset.as_deref(),value.weekly_reset.as_deref())?;
- let _=storage::cleanup(&db,s.settings.lock().unwrap().retention_days);}
- *s.usage.lock().unwrap()=Some(value.clone());*s.error.lock().unwrap()=None;Ok(value)
-}
 #[tauri::command]async fn refresh(app:AppHandle,s:tauri::State<'_,Arc<State>>)->Result<api::Usage,String>{
- let result=update(&s).await;if let Err(ref e)=result{*s.error.lock().unwrap()=Some(e.clone());}let _=app.emit("credits:updated",());result
+ let result=refresh_internal(&s,true).await;
+ if let Err(ref e)=result{*s.error.lock().unwrap()=Some(e.clone());}
+ let _=app.emit("credits:updated",());result
 }
-#[tauri::command]fn get_history(s:tauri::State<'_,Arc<State>>)->Result<Vec<serde_json::Value>,String>{storage::history(&s.db.lock().unwrap())}
+#[tauri::command]async fn manual_trigger(app:AppHandle,s:tauri::State<'_,Arc<State>>)->Result<Snapshot,String>{
+ let result=trigger(&s,0,"手動").await;
+ if let Err(ref e)=result{record(&s,"error",&format!("手動觸發失敗: {e}"));}
+ let _=app.emit("credits:updated",());result?;Ok(snapshot(&s))
+}
+#[tauri::command]async fn banked_reset(app:AppHandle,s:tauri::State<'_,Arc<State>>,allow_partial:bool)->Result<Snapshot,String>{
+ consume(&s,allow_partial,None).await?;
+ let _=app.emit("credits:updated",());Ok(snapshot(&s))
+}
+#[tauri::command]fn toggle_banked_armed(s:tauri::State<'_,Arc<State>>)->Result<Snapshot,String>{
+ let mut armed=s.armed.lock().unwrap();
+ if armed.is_some(){*armed=None;drop(armed);record(&s,"banked_reset","取消 Banked Reset 待命");}
+ else{
+  let credit=s.credits.lock().unwrap().as_ref().and_then(|x|x.available.first().cloned()).ok_or("沒有可用的 Banked Reset")?;
+  *armed=Some(credit.id);drop(armed);record(&s,"banked_reset","Banked Reset 用盡後自動使用一次 · 已待命");
+ }
+ Ok(snapshot(&s))
+}
+#[tauri::command]async fn ntfy_test(s:tauri::State<'_,Arc<State>>)->Result<String,String>{
+ let url=s.settings.lock().unwrap().ntfy_topic.clone();
+ if url.is_empty(){return Err("請先儲存 ntfy 網址".into())}
+ let result=api::ntfy_send(&url,"Codex Tools 測試","ntfy 通知測試成功").await;
+ let msg=match &result{Ok(_)=>"已發送測試通知".into(),Err(e)=>format!("發送失敗: {e}")};
+ *s.ntfy_status.lock().unwrap()=msg;
+ result?;Ok(s.ntfy_status.lock().unwrap().clone())
+}
+#[tauri::command]fn get_history(s:tauri::State<'_,Arc<State>>)->Result<Vec<serde_json::Value>,String>{
+ storage::history(&s.db.lock().unwrap())
+}
+#[tauri::command]fn get_events(s:tauri::State<'_,Arc<State>>)->Result<Vec<serde_json::Value>,String>{
+ storage::events(&s.db.lock().unwrap())
+}
+async fn run_planned(s:&State,planned:engine::Next){
+ let mode=s.settings.lock().unwrap().mode.clone();
+ if mode==schedule::Mode::Off{return;}
+ if engine::is_stale(now(),planned.at){
+  record(s,"scheduler","略過睡眠或程式暫停期間逾期的排程");
+  replan(s);return;
+ }
+ // Re-check server state on every scheduled action.
+ let quota=match refresh_internal(s,false).await{
+  Ok(v)=>v,Err(e)=>{record(s,"error",&format!("排程查詢失敗: {e}"));replan(s);return}
+ };
+ if mode==schedule::Mode::Custom&&engine::confirmed(&quota,now()){
+  let remaining=engine::reset_timestamp(quota.five_reset.as_ref()).unwrap_or(now())-now();
+  if remaining>=0&&remaining<=60{
+   s.engine.lock().unwrap().next=Some(engine::Next{
+    at:now()+remaining+15,kind:engine::Kind::AnchorRetry,auto_count:planned.auto_count,
+    reason:"等候 5 小時重置".into()});
+   return;
+  }
+ }
+ if let Err(e)=engine::can_trigger(&quota,now()){
+  record(s,"scheduler",&format!("略過排程: {e}"));
+  replan(s);return;
+ }
+ let followups=if mode==schedule::Mode::Custom{
+  if planned.kind==engine::Kind::Chain{s.engine.lock().unwrap().chain_remaining.saturating_sub(1)}
+  else{planned.auto_count}
+ }else{0};
+ if let Err(e)=trigger(s,followups,"排程").await{
+  record(s,"error",&format!("排程觸發失敗: {e}"));
+  notify(s,"Codex 排程錯誤",&e).await;
+  replan(s);
+  return;
+ }
+ if planned.kind==engine::Kind::Chain&&followups==0{
+  let mut e=s.engine.lock().unwrap();e.chain_remaining=0;e.chain_reset=None;
+ }
+ replan(s);
+}
 pub fn run(){
  tauri::Builder::default().setup(|app|{
   let handle=app.handle().clone();
   let path=handle.path().app_data_dir()?;std::fs::create_dir_all(&path)?;
   let db=storage::open(&path.join("codexcredits.sqlite3")).map_err(std::io::Error::other)?;
-  let mut settings=storage::get_settings(&db);settings.mode=schedule::Mode::Off;
-  let s=Arc::new(State{db:Mutex::new(db),settings:Mutex::new(settings),usage:Mutex::new(None),error:Mutex::new(None),updating:tokio::sync::Mutex::new(()),login_busy:tokio::sync::Mutex::new(())});
-  app.manage(s.clone());
-  let show=MenuItem::with_id(app,"show","顯示",true,None::<&str>)?;
+  let settings=storage::get_settings(&db);
+  let state=Arc::new(State{
+   db:Mutex::new(db),settings:Mutex::new(settings),usage:Mutex::new(None),
+   credits:Mutex::new(None),global:Mutex::new(None),last_credits:Mutex::new(0),last_global:Mutex::new(0),
+   ntfy_status:Mutex::new("尚未測試".into()),armed:Mutex::new(None),
+   engine:Mutex::new(engine::Engine::default()),error:Mutex::new(None),
+   updating:tokio::sync::Mutex::new(()),action:tokio::sync::Mutex::new(()),
+   login_busy:tokio::sync::Mutex::new(())
+  });
+  app.manage(state.clone());
+  let show=MenuItem::with_id(app,"show","顯示 Codex Tools",true,None::<&str>)?;
   let quit=MenuItem::with_id(app,"quit","結束並停止監測",true,None::<&str>)?;
   let menu=Menu::with_items(app,&[&show,&quit])?;
   let icon=tauri::image::Image::new_owned(vec![46_u8,122,222,255].repeat(256),16,16);
-  TrayIconBuilder::new().icon(icon).menu(&menu).on_menu_event(|app,event|match event.id.as_ref(){
-    "show"=>{if let Some(w)=app.get_webview_window("main"){let _=w.show();let _=w.set_focus();}},
-    "quit"=>app.exit(0),_=>{}
-  }).build(app)?;
+  TrayIconBuilder::new().icon(icon).menu(&menu)
+   .on_menu_event(|app,event|match event.id.as_ref(){
+     "show"=>{if let Some(w)=app.get_webview_window("main"){let _=w.show();let _=w.set_focus();}},
+     "quit"=>app.exit(0),_=>{}
+   }).build(app)?;
   tauri::async_runtime::spawn(async move{
-   loop{let mins=s.settings.lock().unwrap().sampling_minutes.clamp(1,1440);
-    tokio::time::sleep(Duration::from_secs(mins*60)).await;
-    if token().is_err(){continue;}
-    if let Err(e)=update(&s).await{*s.error.lock().unwrap()=Some(e);}
-    let _=handle.emit("credits:updated",());
+   // First obtain a fresh quota after restart; never replay old persisted alarms.
+   if token().is_ok(){let _=refresh_internal(&state,true).await;}
+   let mut last_sample=now();
+   loop{
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    let interval=state.settings.lock().unwrap().sampling_minutes.clamp(10,60) as i64*60;
+    if now()-last_sample>=interval{
+     last_sample=now();
+     if token().is_ok(){
+      if let Err(e)=refresh_internal(&state,false).await{*state.error.lock().unwrap()=Some(e);}
+      let armed_id={state.armed.lock().unwrap().clone()};
+     if let Some(id)=armed_id{
+       let exhausted=state.usage.lock().unwrap().as_ref().is_some_and(engine::exhausted);
+       if exhausted{
+        // Disarm before redemption to guarantee one-shot even if response is ambiguous.
+        *state.armed.lock().unwrap()=None;
+        if let Err(e)=consume(&state,false,Some(id)).await{record(&state,"error",&format!("自動 Banked Reset 未完成: {e}"));}
+       }
+      }
+      let _=handle.emit("credits:updated",());
+     }
+    }
+    let due={
+     let mut engine=state.engine.lock().unwrap();
+     if engine.next.as_ref().is_some_and(|e|e.at<=now()){engine.next.take()}else{None}
+    };
+    if let Some(next)=due{
+     run_planned(&state,next).await;
+     let _=handle.emit("credits:updated",());
+    }
    }
-  });Ok(())
+  });
+  Ok(())
  }).on_window_event(|window,event|{
   if let WindowEvent::CloseRequested{api,..}=event{api.prevent_close();let _=window.hide();}
- }).invoke_handler(tauri::generate_handler![get_snapshot,save_settings,set_access_token,login_with_chatgpt,sign_out,refresh,get_history])
- .run(tauri::generate_context!()).expect("Unable to start CodexCredits");
+ })
+ .invoke_handler(tauri::generate_handler![
+  get_snapshot,save_settings,login_with_chatgpt,sign_out,refresh,manual_trigger,
+  banked_reset,toggle_banked_armed,ntfy_test,get_history,get_events
+ ])
+ .run(tauri::generate_context!()).expect("CodexCredits could not start");
 }

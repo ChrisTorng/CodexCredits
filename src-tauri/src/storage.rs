@@ -1,61 +1,77 @@
 use std::path::Path;
 use chrono::Utc;
-use rusqlite::{params, Connection};
+use rusqlite::{params,Connection};
 use crate::schedule::Settings;
 
-pub fn open(path: &Path) -> Result<Connection, String> {
-    let conn = Connection::open(path).map_err(|e| e.to_string())?;
-    conn.execute_batch("PRAGMA journal_mode=WAL;
-        CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS samples (id INTEGER PRIMARY KEY, at TEXT NOT NULL, five_hour REAL, weekly REAL, five_reset TEXT, weekly_reset TEXT);
-        CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY, at TEXT NOT NULL, kind TEXT NOT NULL, detail TEXT NOT NULL);
-        CREATE INDEX IF NOT EXISTS idx_samples_at ON samples(at);
-        CREATE INDEX IF NOT EXISTS idx_events_at ON events(at);").map_err(|e| e.to_string())?;
-    Ok(conn)
+pub fn open(path:&Path)->Result<Connection,String>{
+ let conn=Connection::open(path).map_err(|e|e.to_string())?;
+ conn.execute_batch("PRAGMA journal_mode=WAL;
+  CREATE TABLE IF NOT EXISTS kv(key TEXT PRIMARY KEY,value TEXT NOT NULL);
+  CREATE TABLE IF NOT EXISTS samples(id INTEGER PRIMARY KEY,at TEXT NOT NULL,five_hour REAL,weekly REAL,five_reset TEXT,weekly_reset TEXT);
+  CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY,at TEXT NOT NULL,kind TEXT NOT NULL,detail TEXT NOT NULL);
+  CREATE INDEX IF NOT EXISTS idx_samples_at ON samples(at);
+  CREATE INDEX IF NOT EXISTS idx_events_at ON events(at);").map_err(|e|e.to_string())?;
+ Ok(conn)
 }
-pub fn get_settings(conn: &Connection) -> Settings {
-    conn.query_row("SELECT value FROM kv WHERE key='settings'", [], |r| r.get::<_,String>(0))
-        .ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+pub fn get_settings(db:&Connection)->Settings{
+ db.query_row("SELECT value FROM kv WHERE key='settings'",[],|r|r.get::<_,String>(0))
+  .ok().and_then(|x|serde_json::from_str(&x).ok()).unwrap_or_default()
 }
-pub fn save_settings(conn: &Connection, settings: &Settings) -> Result<(), String> {
-    if !settings.valid() { return Err("設定值超出允許範圍".into()); }
-    let json = serde_json::to_string(settings).map_err(|e| e.to_string())?;
-    conn.execute("INSERT INTO kv(key,value) VALUES('settings',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value", params![json]).map_err(|e|e.to_string())?;
-    Ok(())
+pub fn save_settings(db:&Connection,s:&Settings)->Result<(),String>{
+ if !s.valid(){return Err("設定值超出允許範圍".into());}
+ let json=serde_json::to_string(s).map_err(|e|e.to_string())?;
+ db.execute("INSERT INTO kv(key,value) VALUES('settings',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+  params![json]).map_err(|e|e.to_string())?;
+ Ok(())
 }
-pub fn add_sample(conn: &Connection, five: Option<f64>, weekly: Option<f64>, five_reset: Option<&str>, weekly_reset: Option<&str>) -> Result<(), String> {
-    conn.execute("INSERT INTO samples(at,five_hour,weekly,five_reset,weekly_reset) VALUES(?1,?2,?3,?4,?5)",
-        params![Utc::now().to_rfc3339(),five,weekly,five_reset,weekly_reset]).map_err(|e|e.to_string())?;
-    Ok(())
+pub fn add_sample(db:&Connection,five:Option<f64>,weekly:Option<f64>,f_reset:Option<&str>,w_reset:Option<&str>)->Result<(),String>{
+ // Android: coalesce snapshots within 30 seconds to avoid noisy duplicate samples.
+ let old:Option<(i64,String)>=db.query_row("SELECT id,at FROM samples ORDER BY id DESC LIMIT 1",[],|r|Ok((r.get(0)?,r.get(1)?))).ok();
+ let now=Utc::now();
+ if let Some((id,at))=old{
+  if chrono::DateTime::parse_from_rfc3339(&at).is_ok_and(|t|now.signed_duration_since(t).num_seconds().abs()<30){
+   db.execute("UPDATE samples SET at=?1,five_hour=?2,weekly=?3,five_reset=?4,weekly_reset=?5 WHERE id=?6",
+    params![now.to_rfc3339(),five,weekly,f_reset,w_reset,id]).map_err(|e|e.to_string())?;return Ok(());
+  }
+ }
+ db.execute("INSERT INTO samples(at,five_hour,weekly,five_reset,weekly_reset) VALUES(?1,?2,?3,?4,?5)",
+  params![now.to_rfc3339(),five,weekly,f_reset,w_reset]).map_err(|e|e.to_string())?;Ok(())
 }
-pub fn cleanup(conn: &Connection, days: i64) -> Result<(), String> {
-    let cutoff = (Utc::now() - chrono::Duration::days(days)).to_rfc3339();
-    conn.execute("DELETE FROM samples WHERE at < ?1", params![cutoff]).map_err(|e|e.to_string())?;
-    conn.execute("DELETE FROM events WHERE at < ?1", params![cutoff]).map_err(|e|e.to_string())?;
-    Ok(())
+pub fn event(db:&Connection,kind:&str,detail:&str)->Result<(),String>{
+ let duplicate:Option<(String,String)>=db.query_row("SELECT at,detail FROM events WHERE kind=?1 ORDER BY id DESC LIMIT 1",
+  params![kind],|r|Ok((r.get(0)?,r.get(1)?))).ok();
+ if let Some((at,old))=duplicate{
+  if old==detail&&chrono::DateTime::parse_from_rfc3339(&at).is_ok_and(|t|Utc::now().signed_duration_since(t).num_seconds().abs()<120){return Ok(());}
+ }
+ db.execute("INSERT INTO events(at,kind,detail) VALUES(?1,?2,?3)",
+  params![Utc::now().to_rfc3339(),kind,detail]).map_err(|e|e.to_string())?;Ok(())
 }
-pub fn history(conn: &Connection) -> Result<Vec<serde_json::Value>, String> {
-    let mut stmt = conn.prepare("SELECT at,five_hour,weekly FROM samples ORDER BY id DESC LIMIT 1440").map_err(|e|e.to_string())?;
-    let rows = stmt.query_map([], |r| Ok(serde_json::json!({
-        "at":r.get::<_,String>(0)?,
-        "five_hour":r.get::<_,Option<f64>>(1)?,
-        "weekly":r.get::<_,Option<f64>>(2)?
-    }))).map_err(|e|e.to_string())?;
-    let mut out = Vec::new();
-    for row in rows { out.push(row.map_err(|e|e.to_string())?); }
-    out.reverse();
-    Ok(out)
+pub fn cleanup(db:&Connection,days:i64)->Result<(),String>{
+ let cutoff=(Utc::now()-chrono::Duration::days(days)).to_rfc3339();
+ db.execute("DELETE FROM samples WHERE at < ?1",params![cutoff]).map_err(|e|e.to_string())?;
+ db.execute("DELETE FROM events WHERE at < ?1",params![cutoff]).map_err(|e|e.to_string())?;Ok(())
 }
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test] fn stores_defaults_and_samples() {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch("CREATE TABLE kv(key TEXT PRIMARY KEY,value TEXT NOT NULL); CREATE TABLE samples(id INTEGER PRIMARY KEY,at TEXT,five_hour REAL,weekly REAL,five_reset TEXT,weekly_reset TEXT);").unwrap();
-        let s = get_settings(&conn);
-        assert!(s.valid());
-        save_settings(&conn,&s).unwrap();
-        add_sample(&conn,Some(20.0),Some(5.0),None,None).unwrap();
-        assert_eq!(history(&conn).unwrap().len(),1);
-    }
+pub fn history(db:&Connection)->Result<Vec<serde_json::Value>,String>{
+ let mut stmt=db.prepare("SELECT at,five_hour,weekly,five_reset,weekly_reset FROM samples ORDER BY id DESC LIMIT 1440").map_err(|e|e.to_string())?;
+ let rows=stmt.query_map([],|r|Ok(serde_json::json!({
+  "at":r.get::<_,String>(0)?,"five_hour":r.get::<_,Option<f64>>(1)?,"weekly":r.get::<_,Option<f64>>(2)?,
+  "five_reset":r.get::<_,Option<String>>(3)?,"weekly_reset":r.get::<_,Option<String>>(4)?
+ }))).map_err(|e|e.to_string())?;
+ let mut out=Vec::new();for row in rows{out.push(row.map_err(|e|e.to_string())?);}out.reverse();Ok(out)
+}
+pub fn events(db:&Connection)->Result<Vec<serde_json::Value>,String>{
+ let mut stmt=db.prepare("SELECT at,kind,detail FROM events ORDER BY id DESC LIMIT 60").map_err(|e|e.to_string())?;
+ let rows=stmt.query_map([],|r|Ok(serde_json::json!({"at":r.get::<_,String>(0)?,"kind":r.get::<_,String>(1)?,"detail":r.get::<_,String>(2)?})))
+  .map_err(|e|e.to_string())?;
+ let mut out=Vec::new();for row in rows{out.push(row.map_err(|e|e.to_string())?);}Ok(out)
+}
+#[cfg(test)]mod tests{
+ use super::*;
+ #[test]fn roundtrip(){
+  let db=Connection::open_in_memory().unwrap();
+  db.execute_batch("CREATE TABLE kv(key TEXT PRIMARY KEY,value TEXT NOT NULL);CREATE TABLE samples(id INTEGER PRIMARY KEY,at TEXT,five_hour REAL,weekly REAL,five_reset TEXT,weekly_reset TEXT);CREATE TABLE events(id INTEGER PRIMARY KEY,at TEXT,kind TEXT,detail TEXT);").unwrap();
+  let s=get_settings(&db);save_settings(&db,&s).unwrap();assert_eq!(get_settings(&db).sampling_minutes,10);
+  add_sample(&db,Some(27.),Some(45.),None,None).unwrap();assert_eq!(history(&db).unwrap().len(),1);
+  event(&db,"test","測試").unwrap();assert_eq!(events(&db).unwrap().len(),1);
+ }
 }
