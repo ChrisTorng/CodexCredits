@@ -1,6 +1,7 @@
 mod api;
 mod schedule;
 mod storage;
+mod credentials;
 use std::{sync::{Arc,Mutex},time::Duration};
 use tauri::{AppHandle,Emitter,Manager,WindowEvent};
 use tauri::menu::{Menu,MenuItem};
@@ -9,8 +10,7 @@ use serde::Serialize;
 struct State { db:Mutex<rusqlite::Connection>, settings:Mutex<schedule::Settings>, usage:Mutex<Option<api::Usage>>, error:Mutex<Option<String>>, updating:tokio::sync::Mutex<()> }
 #[derive(Serialize)]
 struct Snapshot { settings:schedule::Settings, usage:Option<api::Usage>, error:Option<String>, signed_in:bool, next_anchor:Option<String> }
-fn credentials()->Result<keyring::Entry,String>{keyring::Entry::new("CodexCredits","codex-access-token").map_err(|e|e.to_string())}
-fn token()->Result<String,String>{credentials()?.get_password().map_err(|_|"請先登入".to_string())}
+fn token()->Result<String,String>{credentials::load()}
 fn snapshot(s:&State)->Snapshot{
  let settings=s.settings.lock().unwrap().clone();
  let next_anchor=schedule::next_anchor(chrono::Local::now(),&settings.rules).map(|v|v.to_rfc3339());
@@ -24,10 +24,10 @@ fn snapshot(s:&State)->Snapshot{
 }
 #[tauri::command]fn set_access_token(s:tauri::State<'_,Arc<State>>,token:String)->Result<Snapshot,String>{
  let v=token.trim();if v.len()<12||v.len()>16384{return Err("無效 Token".into())}
- credentials()?.set_password(v).map_err(|e|e.to_string())?;Ok(snapshot(&s))
+ credentials::save(v)?;Ok(snapshot(&s))
 }
 #[tauri::command]fn sign_out(s:tauri::State<'_,Arc<State>>)->Result<Snapshot,String>{
- let _=credentials()?.delete_credential();*s.usage.lock().unwrap()=None;Ok(snapshot(&s))
+ credentials::sign_out()?;*s.usage.lock().unwrap()=None;Ok(snapshot(&s))
 }
 async fn update(s:&State)->Result<api::Usage,String>{
  let _lock=s.updating.lock().await;
