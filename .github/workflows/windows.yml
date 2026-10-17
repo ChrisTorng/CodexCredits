@@ -22,15 +22,15 @@ jobs:
       - run: npm run build
       - run: cargo test --manifest-path src-tauri/Cargo.toml
       - run: npm run tauri build -- --no-bundle
-      - name: Package ZIP
+      - name: Stage portable files
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force release | Out-Null
           Copy-Item src-tauri/target/release/CodexCredits.exe release/
           Copy-Item README.md,LICENSE release/
-          Compress-Archive release/* CodexCredits-Windows-x64.zip -Force
+      # GitHub Actions artifact already downloads as a ZIP; avoid nesting a second ZIP.
       - uses: actions/upload-artifact@v4
         with:
           name: CodexCredits-Windows-x64
-          path: CodexCredits-Windows-x64.zip
+          path: release/
           if-no-files-found: error
