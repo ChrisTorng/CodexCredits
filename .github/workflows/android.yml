@@ -1,0 +1,67 @@
+name: Android parity APK
+on:
+  push:
+    branches: [main, android-parity]
+    paths:
+      - 'src/**'
+      - 'src-tauri/**'
+      - 'mobile/**'
+      - 'package.json'
+      - '.github/workflows/android.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: ChrisTorng/android-codex-tools
+          ref: 7055017ca542b66db8716b458ab8534aa563ebc8
+          path: legacy
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - uses: android-actions/setup-android@v3
+      - run: sdkmanager "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"
+      - name: Prepare Android app icons
+        run: |
+          python3 -m pip install --quiet Pillow
+          python3 - <<'PY'
+          from PIL import Image
+          from pathlib import Path
+          root=Path("src-tauri/icons")
+          src=Image.open(root/"icon.ico").convert("RGBA")
+          for name,size in (("icon.png",512),("128x128.png",128),("32x32.png",32)):
+              src.resize((size,size),Image.Resampling.LANCZOS).save(root/name)
+          PY
+      - run: npm install
+      - name: Initialize Android host
+        run: |
+          export NDK_HOME="$ANDROID_HOME/ndk/27.2.12479018"
+          npm run tauri -- android init --ci --skip-targets-install --config src-tauri/tauri.android.conf.json
+      - name: Integrate original Android native engine
+        run: python3 mobile/android/prepare.py --legacy legacy
+      - name: Build ARM64 validation APK
+        run: |
+          export NDK_HOME="$ANDROID_HOME/ndk/27.2.12479018"
+          npm run tauri -- android build --debug --apk --target aarch64 --config src-tauri/tauri.android.conf.json
+      - name: Inspect APK size
+        run: |
+          find src-tauri/gen/android/app/build/outputs/apk -type f -name '*.apk' -printf '%p %s bytes\n'
+          test "$(find src-tauri/gen/android/app/build/outputs/apk -name '*.apk' | wc -l)" -ge 1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CodexCredits-Android-Validation
+          path: src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+          if-no-files-found: error
