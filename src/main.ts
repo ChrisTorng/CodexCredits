@@ -71,6 +71,35 @@ if(androidRuntime){
   if(background)background.textContent="Android：系統背景工作負責採樣與自動觸發；實際執行受省電政策、精確鬧鐘與通知權限影響。";
   const heading=document.querySelector("#page-settings h3");
   if(heading)heading.textContent="Android 系統通知";
+  const policy=document.createElement("section");
+  policy.className="card compact";
+  policy.innerHTML=[
+    '<h2>Android 背景排程權限</h2>',
+    '<p id="android-platform-state">正在檢查精準鬧鐘與省電設定…</p>',
+    '<div class="button-row"><button id="android-exact">精準鬧鐘設定</button><button id="android-battery">電池最佳化</button></div>',
+    '<div class="button-row"><button id="android-app-settings">App 電池設定</button><button id="android-policy-refresh">重新檢查</button></div>'
+  ].join("");
+  document.querySelector("#page-settings")?.append(policy);
+  const policyRefresh=async()=>{
+    try{
+      const value=await invoke<{exact_alarm:boolean;battery_exempt:boolean}>("android_platform_status");
+      const p=document.getElementById("android-platform-state");
+      if(p)p.textContent="精準鬧鐘："+(value.exact_alarm?"已允許":"尚未允許")
+        +" · 省電最佳化豁免："+(value.battery_exempt?"是":"否");
+    }catch(e){
+      const p=document.getElementById("android-platform-state");
+      if(p)p.textContent="無法讀取權限："+String(e);
+    }
+  };
+  for(const [id,kind] of [["android-exact","exact"],["android-battery","battery"],["android-app-settings","app"]]){
+    document.getElementById(id)?.addEventListener("click",async()=>{
+      try{await invoke("android_open_system_settings",{kind});}
+      catch(e){const p=document.getElementById("android-platform-state");if(p)p.textContent=String(e);}
+    });
+  }
+  document.getElementById("android-policy-refresh")?.addEventListener("click",()=>void policyRefresh());
+  document.addEventListener("visibilitychange",()=>{if(!document.hidden)void policyRefresh();});
+  void policyRefresh();
 }
 
 let snapshot:Snapshot|null=null;
