@@ -421,6 +421,7 @@ pub fn run(){
       let _=handle.emit("credits:updated",());
      }
     }
+    #[cfg(not(target_os="android"))]
     let due={
      let mut engine=state.engine.lock().unwrap();
      if engine.next.as_ref().is_some_and(|e|e.at<=now()){engine.next.take()}else{None}
