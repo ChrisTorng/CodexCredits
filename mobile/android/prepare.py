@@ -79,7 +79,7 @@ if arguments.release_keystore is not None:
     keystore=arguments.release_keystore.expanduser().resolve(strict=True)
     props=project.parent/"keystore.properties"
     props.write_text("keyAlias=androiddebugkey\npassword=android\nstoreFile="+str(keystore)+"\n")
-    gradle.write_text("import java.util.Properties\\nimport java.io.FileInputStream\\n"+gradle.read_text())
+    gradle.write_text("import java.util.Properties\nimport java.io.FileInputStream\n"+gradle.read_text())
     with gradle.open("a") as f:
         f.write("""
 android {
