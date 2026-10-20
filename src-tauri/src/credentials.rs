@@ -15,12 +15,15 @@ trait SecretStore {
     fn remove(&self, name: &str) -> Result<(), String>;
 }
 
+#[cfg(not(target_os="android"))]
 struct SystemStore;
+#[cfg(not(target_os="android"))]
 impl SystemStore {
     fn entry(name: &str) -> Result<keyring::Entry, String> {
         keyring::Entry::new(SERVICE, name).map_err(|e| format!("無法使用系統憑證庫: {e}"))
     }
 }
+#[cfg(not(target_os="android"))]
 impl SecretStore for SystemStore {
     fn get(&self, name: &str) -> Result<Option<String>, String> {
         match Self::entry(name)?.get_password() {
@@ -39,6 +42,15 @@ impl SecretStore for SystemStore {
             Err(e) => Err(format!("清除系統憑證失敗: {e}")),
         }
     }
+}
+
+#[cfg(target_os="android")]
+struct SystemStore;
+#[cfg(target_os="android")]
+impl SecretStore for SystemStore {
+    fn get(&self,name:&str)->Result<Option<String>,String>{crate::android_bridge::credential_get(name)}
+    fn put(&self,name:&str,value:&str)->Result<(),String>{crate::android_bridge::credential_put(name,value)}
+    fn remove(&self,name:&str)->Result<(),String>{crate::android_bridge::credential_remove(name)}
 }
 
 fn chunk_name(bank: char, index: usize) -> String {

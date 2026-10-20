@@ -114,6 +114,9 @@ pub async fn browser_login()->Result<Session,String>{
     let redirect=format!("http://127.0.0.1:{port}/auth/callback");
     let (verifier,challenge,state)=pkce();
     let url=login_url(&redirect,&challenge,&state)?;
+    #[cfg(target_os="android")]
+    crate::android_bridge::open_url(url.as_str())?;
+    #[cfg(not(target_os="android"))]
     webbrowser::open(url.as_str()).map_err(|e|format!("無法開啟瀏覽器: {e}"))?;
     let code=callback(listener,&state).await?;
     let res=http()?.post(TOKEN_URL).form(&[
@@ -129,7 +132,10 @@ pub async fn browser_login()->Result<Session,String>{
         account_id,expires_at:expires_in(value.expires_in)})
 }
 pub fn save_session(s:&Session)->Result<(),String>{
-    crate::credentials::save(&serde_json::to_string(s).map_err(|e|e.to_string())?)
+    crate::credentials::save(&serde_json::to_string(s).map_err(|e|e.to_string())?)?;
+    #[cfg(target_os="android")]
+    crate::android_bridge::sync_auth(&serde_json::to_string(s).map_err(|e|e.to_string())?)?;
+    Ok(())
 }
 pub async fn valid_access()->Result<Access,String>{
     let stored=crate::credentials::load()?;

@@ -63,6 +63,15 @@ app.innerHTML=[
 '<button class="action" id="rule-add">＋ 新增錨點</button><button class="action" id="rule-recommended">套用建議：06:00 ＋ 接續 3 次</button>',
 '<div class="dialog-footer"><button id="rule-cancel">取消</button><button class="primary" id="rule-save">儲存</button></div></dialog>'
 ].join("");
+const androidRuntime=/Android/i.test(navigator.userAgent);
+if(androidRuntime){
+  const alarmText=document.querySelector("#page-schedule .card.compact small");
+  if(alarmText)alarmText.textContent="Android：沿用原版 AlarmManager 與 JobScheduler 背景排程，支援重新開機後恢復。";
+  const background=document.querySelector("#page-settings .card.compact:last-of-type p");
+  if(background)background.textContent="Android：系統背景工作負責採樣與自動觸發；實際執行受省電政策、精確鬧鐘與通知權限影響。";
+  const heading=document.querySelector("#page-settings h3");
+  if(heading)heading.textContent="Android 系統通知";
+}
 
 let snapshot:Snapshot|null=null;
 let samples:Sample[]=[];

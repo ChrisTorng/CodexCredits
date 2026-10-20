@@ -23,14 +23,20 @@ chrono = { version = "0.4", features = ["serde", "clock"] }
 tokio = { version = "1", features = ["time", "sync", "macros", "net", "io-util"] }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 rusqlite = { version = "0.37", features = ["bundled"] }
-keyring = { version = "3.6", features = ["windows-native", "apple-native", "sync-secret-service"] }
 thiserror = "2"
 sha2 = "0.10"
 base64 = "0.22"
 rand = "0.8"
 url = "2"
-webbrowser = "1"
 
 uuid = { version = "1", features = ["v4"] }
 tauri-plugin-notification = "=2.3.3"
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+keyring = { version = "3.6", features = ["windows-native", "apple-native", "sync-secret-service"] }
+webbrowser = "1"
 tauri-plugin-single-instance = "=2.3.2"
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21"
+ndk-context = "0.1"
