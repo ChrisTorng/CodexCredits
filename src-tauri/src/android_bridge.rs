@@ -26,7 +26,8 @@ fn call(method:&str,args:&[&str])->Result<Option<String>,String>{
     let value=env.call_static_method(&class,method,&sig,&values)
         .and_then(|v|v.l()).map_err(|e|format!("Android {method}: {e}"))?;
     if value.is_null(){return Ok(None);}
-    let output=env.get_string(&JString::from(value)).map_err(|e|e.to_string())?;
+    let jstring=JString::from(value);
+    let output=env.get_string(&jstring).map_err(|e|e.to_string())?;
     Ok(Some(output.to_string_lossy().into_owned()))
 }
 pub fn export_legacy()->Result<serde_json::Value,String>{
