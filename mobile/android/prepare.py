@@ -79,13 +79,14 @@ if arguments.release_keystore is not None:
     keystore=arguments.release_keystore.expanduser().resolve(strict=True)
     props=project.parent/"keystore.properties"
     props.write_text("keyAlias=androiddebugkey\npassword=android\nstoreFile="+str(keystore)+"\n")
+    gradle.write_text("import java.util.Properties\\nimport java.io.FileInputStream\\n"+gradle.read_text())
     with gradle.open("a") as f:
         f.write("""
 android {
     signingConfigs {
         create("legacyUpgrade") {
-            val props = java.util.Properties().apply {
-                load(java.io.FileInputStream(rootProject.file("keystore.properties")))
+            val props = Properties().apply {
+                load(FileInputStream(rootProject.file("keystore.properties")))
             }
             keyAlias = props["keyAlias"] as String
             keyPassword = props["password"] as String
