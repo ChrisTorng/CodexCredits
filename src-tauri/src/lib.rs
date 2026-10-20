@@ -287,15 +287,23 @@ async fn consume(s:&State,allow_partial:bool,selected:Option<String>)->Result<()
 #[tauri::command]fn get_local_state(s:tauri::State<'_,Arc<State>>)->Result<LocalState,String>{
  let (history,events)={
   let db=s.db.lock().unwrap();
+  #[cfg(target_os="android")]
+  legacy::sync_native(&db)?;
   (storage::history(&db)?,storage::events(&db)?)
  };
  Ok(LocalState{snapshot:snapshot(&s),history,events})
 }
 #[tauri::command]fn get_history(s:tauri::State<'_,Arc<State>>)->Result<Vec<serde_json::Value>,String>{
- storage::history(&s.db.lock().unwrap())
+ let db=s.db.lock().unwrap();
+ #[cfg(target_os="android")]
+ legacy::sync_native(&db)?;
+ storage::history(&db)
 }
 #[tauri::command]fn get_events(s:tauri::State<'_,Arc<State>>)->Result<Vec<serde_json::Value>,String>{
- storage::events(&s.db.lock().unwrap())
+ let db=s.db.lock().unwrap();
+ #[cfg(target_os="android")]
+ legacy::sync_native(&db)?;
+ storage::events(&db)
 }
 fn defer_scheduled_retry(s:&State,planned:&engine::Next,seconds:i64){
  let mut e=s.engine.lock().unwrap();
