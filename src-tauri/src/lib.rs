@@ -51,6 +51,22 @@ struct Snapshot{
 }
 fn now()->i64{chrono::Utc::now().timestamp()}
 fn token()->Result<String,String>{credentials::load()}
+#[cfg(target_os="android")]
+fn native_next()->Option<engine::Next>{
+ let platform=android_bridge::platform_status().ok()?;
+ let at=platform["next_alarm_ms"].as_i64().unwrap_or(0)/1000;
+ if at<=0{return None;}
+ let kind=match platform["next_event_kind"].as_str().unwrap_or("auto"){
+  "anchor"=>engine::Kind::Anchor,
+  "anchor_retry"=>engine::Kind::AnchorRetry,
+  "chain"=>engine::Kind::Chain,
+  _=>engine::Kind::Auto
+ };
+ Some(engine::Next{
+  at,kind,auto_count:platform["next_event_auto_count"].as_u64().unwrap_or(0).min(8) as u8,
+  reason:platform["next_alarm_reason"].as_str().unwrap_or("Android 排程").into()
+ })
+}
 fn snapshot(s:&State)->Snapshot{
  Snapshot{
   settings:s.settings.lock().unwrap().clone(),
@@ -58,8 +74,18 @@ fn snapshot(s:&State)->Snapshot{
   credits:s.credits.lock().unwrap().clone(),
   global:s.global.lock().unwrap().clone(),
   ntfy_status:s.ntfy_status.lock().unwrap().clone(),
-  armed:s.armed.lock().unwrap().is_some(),
-  next:s.engine.lock().unwrap().next.clone(),
+  armed:{
+    #[cfg(target_os="android")]
+    {android_bridge::banked_armed().unwrap_or_else(|_|s.armed.lock().unwrap().is_some())}
+    #[cfg(not(target_os="android"))]
+    {s.armed.lock().unwrap().is_some()}
+   },
+  next:{
+    #[cfg(target_os="android")]
+    {native_next()}
+    #[cfg(not(target_os="android"))]
+    {s.engine.lock().unwrap().next.clone()}
+   },
   error:s.error.lock().unwrap().clone(),
   signed_in:token().is_ok(),
  }
@@ -354,6 +380,20 @@ async fn run_planned(s:&State,planned:engine::Next){
  replan(s);
 }
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+#[tauri::command]
+fn android_platform_status()->Result<serde_json::Value,String>{
+ #[cfg(target_os="android")]
+ {android_bridge::platform_status()}
+ #[cfg(not(target_os="android"))]
+ {Err("僅 Android 支援".into())}
+}
+#[tauri::command]
+fn android_open_system_settings(kind:String)->Result<(),String>{
+ #[cfg(target_os="android")]
+ {android_bridge::open_system_settings(&kind)}
+ #[cfg(not(target_os="android"))]
+ {let _=kind;Err("僅 Android 支援".into())}
+}
 pub fn run(){
  let mut builder=tauri::Builder::default().plugin(tauri_plugin_notification::init());
  #[cfg(desktop)]
@@ -450,7 +490,8 @@ pub fn run(){
  })
  .invoke_handler(tauri::generate_handler![
   get_snapshot,save_settings,login_with_chatgpt,sign_out,refresh,manual_trigger,
-  banked_reset,toggle_banked_armed,ntfy_test,native_notify_test,get_local_state,get_history,get_events
+  banked_reset,toggle_banked_armed,ntfy_test,native_notify_test,get_local_state,get_history,get_events,
+  android_platform_status,android_open_system_settings
  ])
  .run(tauri::generate_context!()).expect("CodexCredits could not start");
 }
