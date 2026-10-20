@@ -63,7 +63,12 @@ fn settings(p:&Value)->Result<Settings,String>{
     }
     // Legacy rules can be ambiguous due to historic scheduling edits.
     // Preserve them, but never silently activate an invalid credit-consuming plan.
-    if !s.valid(){s.mode=Mode::Off;}
+    if !s.valid(){
+        s.mode=Mode::Off;
+        // An invalid legacy plan must not prevent importing valid tokens/history.
+        // The original SharedPreferences remain an untouched recovery copy.
+        if !s.valid(){s.rules=vec![Rule::default()];s.overrides.clear();}
+    }
     Ok(s)
 }
 fn import_tokens(tokens:&Value)->Result<(),String>{
@@ -78,7 +83,10 @@ fn import_tokens(tokens:&Value)->Result<(),String>{
     crate::credentials::save(&auth.to_string())
 }
 pub fn import(db:&Connection)->Result<bool,String>{
-    if storage::get_meta(db,"android_legacy_import_v1").is_some(){return Ok(false);}
+    if storage::get_meta(db,"android_legacy_import_v1").is_some(){
+        sync_native(db)?;
+        return Ok(false);
+    }
     let src=crate::android_bridge::export_legacy()?;
     let p=src.get("prefs").ok_or("舊版設定缺少 prefs")?;
     let has_old=p.as_object().is_some_and(|o|!o.is_empty());
@@ -117,6 +125,49 @@ pub fn import(db:&Connection)->Result<bool,String>{
     else{let _=db.execute_batch("ROLLBACK");}
     done?;
     Ok(has_old)
+}
+
+/// Merge new samples/events written by the original Android background scheduler.
+/// Exact timestamps are stable keys; duplicate snapshots are ignored.
+pub fn sync_native(db:&Connection)->Result<(),String>{
+    if storage::get_meta(db,"android_legacy_import_v1").is_none(){return Ok(());}
+    let src=crate::android_bridge::export_legacy()?;
+    let p=src.get("prefs").ok_or("舊版資料缺少 prefs")?;
+    let old_samples=old_json(p,"usage_samples_v1","[]")?;
+    let old_events=old_json(p,"usage_history_events_v1","[]")?;
+    db.execute_batch("BEGIN IMMEDIATE").map_err(|e|e.to_string())?;
+    let done=(||->Result<(),String>{
+        if let Some(rows)=old_samples.as_array(){
+            for v in rows {
+                let Some(at)=v.get("at").and_then(Value::as_i64).and_then(as_date) else{continue};
+                let five=v.get("p").and_then(Value::as_f64).map(|x|(100.-x).clamp(0.,100.));
+                let weekly=v.get("w").and_then(Value::as_f64).map(|x|(100.-x).clamp(0.,100.));
+                let reset=|key:&str|v.get(key).and_then(Value::as_i64).and_then(as_date);
+                db.execute("INSERT INTO samples(at,five_hour,weekly,five_reset,weekly_reset)
+                    SELECT ?1,?2,?3,?4,?5
+                    WHERE NOT EXISTS(SELECT 1 FROM samples WHERE at=?1)",
+                    params![at,five,weekly,reset("pr"),reset("wr")])
+                    .map_err(|e|e.to_string())?;
+            }
+        }
+        if let Some(rows)=old_events.as_array(){
+            for v in rows {
+                let Some(at)=v.get("at").and_then(Value::as_i64).and_then(as_date) else{continue};
+                let kind=v.get("type").and_then(Value::as_str).unwrap_or("legacy");
+                let label=v.get("label").and_then(Value::as_str).unwrap_or("");
+                let source=v.get("source").and_then(Value::as_str).unwrap_or("");
+                let detail=format!("{label} ({source})");
+                db.execute("INSERT INTO events(at,kind,detail)
+                    SELECT ?1,?2,?3
+                    WHERE NOT EXISTS(SELECT 1 FROM events WHERE at=?1 AND kind=?2 AND detail=?3)",
+                    params![at,kind,detail]).map_err(|e|e.to_string())?;
+            }
+        }
+        Ok(())
+    })();
+    if done.is_ok(){db.execute_batch("COMMIT").map_err(|e|e.to_string())?}
+    else{let _=db.execute_batch("ROLLBACK");}
+    done
 }
 #[cfg(test)]mod tests{
     use super::*;
