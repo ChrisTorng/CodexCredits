@@ -4,13 +4,15 @@ mod storage;
 mod credentials;
 mod oauth;
 mod engine;
+#[cfg(target_os="android")] mod android_bridge;
+#[cfg(target_os="android")] mod legacy;
 
 use std::{sync::{Arc,Mutex},time::Duration};
 use serde::Serialize;
 use tauri_plugin_notification::NotificationExt;
 use tauri::{AppHandle,Emitter,Manager,WindowEvent};
-use tauri::menu::{Menu,MenuItem};
-use tauri::tray::TrayIconBuilder;
+#[cfg(desktop)] use tauri::menu::{Menu,MenuItem};
+#[cfg(desktop)] use tauri::tray::TrayIconBuilder;
 
 struct State{
  app:AppHandle,
@@ -197,6 +199,8 @@ async fn consume(s:&State,allow_partial:bool,selected:Option<String>)->Result<()
  {
   let db=s.db.lock().unwrap();storage::save_settings(&db,&settings)?;
  }
+ #[cfg(target_os="android")]
+ android_bridge::sync_settings(&serde_json::to_string(&settings).map_err(|e|e.to_string())?)?;
  let changed_mode=s.settings.lock().unwrap().mode!=settings.mode;
  *s.settings.lock().unwrap()=settings;
  if changed_mode{
@@ -216,6 +220,8 @@ async fn consume(s:&State,allow_partial:bool,selected:Option<String>)->Result<()
 #[tauri::command]async fn sign_out(s:tauri::State<'_,Arc<State>>)->Result<Snapshot,String>{
  let _guard=s.updating.lock().await;
  credentials::sign_out()?;
+ #[cfg(target_os="android")]
+ android_bridge::clear_auth()?;
  *s.usage.lock().unwrap()=None;*s.credits.lock().unwrap()=None;
  *s.armed.lock().unwrap()=None;
  storage::set_meta(&s.db.lock().unwrap(),"banked_armed",None)?;
@@ -223,6 +229,8 @@ async fn consume(s:&State,allow_partial:bool,selected:Option<String>)->Result<()
   let mut settings=s.settings.lock().unwrap();settings.mode=schedule::Mode::Off;
   let copy=settings.clone();drop(settings);
   storage::save_settings(&s.db.lock().unwrap(),&copy)?;
+  #[cfg(target_os="android")]
+  android_bridge::sync_settings(&serde_json::to_string(&copy).map_err(|e|e.to_string())?)?;
  }
  {let mut e=s.engine.lock().unwrap();e.chain_remaining=0;e.chain_reset=None;e.next=None;}
  record(&s,"login","已登出；排程已關閉");
@@ -250,6 +258,14 @@ async fn consume(s:&State,allow_partial:bool,selected:Option<String>)->Result<()
   Some(credit.id)
  };
  storage::set_meta(&s.db.lock().unwrap(),"banked_armed",next.as_deref())?;
+ #[cfg(target_os="android")]
+ {
+  android_bridge::arm_banked(next.is_some())?;
+  if next.is_some()&&!android_bridge::banked_armed()?{
+   storage::set_meta(&s.db.lock().unwrap(),"banked_armed",None)?;
+   return Err("Android 背景排程尚無可用的 Banked Reset，請先更新配額".into());
+  }
+ }
  *s.armed.lock().unwrap()=next.clone();
  record(&s,"banked_reset",if next.is_some(){"Banked Reset 用盡後自動使用一次 · 已待命"}else{"取消 Banked Reset 待命"});
  Ok(snapshot(&s))
@@ -264,7 +280,7 @@ async fn consume(s:&State,allow_partial:bool,selected:Option<String>)->Result<()
 }
 #[tauri::command]fn native_notify_test(s:tauri::State<'_,Arc<State>>)->Result<String,String>{
  if !s.settings.lock().unwrap().native_notify_enabled{return Err("請先開啟系統通知".into())}
- s.app.notification().builder().title("Codex Tools 測試").body("Windows 系統通知已啟用")
+ s.app.notification().builder().title("Codex Tools 測試").body("系統通知已啟用")
   .show().map_err(|e|e.to_string())?;
  Ok("已送出測試通知".into())
 }
@@ -329,30 +345,40 @@ async fn run_planned(s:&State,planned:engine::Next){
  }
  replan(s);
 }
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run(){
- tauri::Builder::default()
- .plugin(tauri_plugin_single_instance::init(|app,_args,_cwd|{
-  if let Some(w)=app.get_webview_window("main"){
-   let _=w.show();
-   let _=w.set_focus();
-  }
- }))
- .plugin(tauri_plugin_notification::init())
+ let mut builder=tauri::Builder::default().plugin(tauri_plugin_notification::init());
+ #[cfg(desktop)]
+ {
+  builder=builder.plugin(tauri_plugin_single_instance::init(|app,_args,_cwd|{
+   if let Some(w)=app.get_webview_window("main"){let _=w.show();let _=w.set_focus();}
+  }));
+ }
+ builder
  .setup(|app|{
   let handle=app.handle().clone();
   let path=handle.path().app_data_dir()?;std::fs::create_dir_all(&path)?;
   let db=storage::open(&path.join("codexcredits.sqlite3")).map_err(std::io::Error::other)?;
+  #[cfg(target_os="android")]
+  let migration_error=legacy::import(&db).err();
   let settings=storage::get_settings(&db);
   let armed=storage::get_meta(&db,"banked_armed");
+  #[cfg(target_os="android")]
+  let armed=if android_bridge::banked_armed().unwrap_or(false){Some("android-native".into())}else{armed};
   let state=Arc::new(State{
    app:handle.clone(),db:Mutex::new(db),settings:Mutex::new(settings),usage:Mutex::new(None),
    credits:Mutex::new(None),global:Mutex::new(None),last_credits:Mutex::new(0),last_global:Mutex::new(0),
    ntfy_status:Mutex::new("尚未測試".into()),armed:Mutex::new(armed),
-   engine:Mutex::new(engine::Engine::default()),error:Mutex::new(None),
+   engine:Mutex::new(engine::Engine::default()),error:Mutex::new({
+    #[cfg(target_os="android")] {migration_error}
+    #[cfg(not(target_os="android"))] {None}
+   }),
    updating:tokio::sync::Mutex::new(()),action:tokio::sync::Mutex::new(()),
    login_busy:tokio::sync::Mutex::new(())
   });
   app.manage(state.clone());
+  #[cfg(desktop)]
+  {
   let show=MenuItem::with_id(app,"show","顯示 Codex Tools",true,None::<&str>)?;
   let quit=MenuItem::with_id(app,"quit","結束並停止監測",true,None::<&str>)?;
   let menu=Menu::with_items(app,&[&show,&quit])?;
@@ -362,6 +388,7 @@ pub fn run(){
      "show"=>{if let Some(w)=app.get_webview_window("main"){let _=w.show();let _=w.set_focus();}},
      "quit"=>app.exit(0),_=>{}
    }).build(app)?;
+  }
   tauri::async_runtime::spawn(async move{
    // First obtain a fresh quota after restart; never replay old persisted alarms.
    if token().is_ok(){
@@ -379,7 +406,9 @@ pub fn run(){
      last_sample=now();
      if token().is_ok(){
       if let Err(e)=refresh_internal(&state,false).await{*state.error.lock().unwrap()=Some(e);}
+      #[cfg(not(target_os="android"))]
       let armed_id={state.armed.lock().unwrap().clone()};
+     #[cfg(not(target_os="android"))]
      if let Some(id)=armed_id{
        let exhausted=state.usage.lock().unwrap().as_ref().is_some_and(engine::exhausted);
        if exhausted{
@@ -396,6 +425,7 @@ pub fn run(){
      let mut engine=state.engine.lock().unwrap();
      if engine.next.as_ref().is_some_and(|e|e.at<=now()){engine.next.take()}else{None}
     };
+    #[cfg(not(target_os="android"))]
     if let Some(next)=due{
      run_planned(&state,next).await;
      let _=handle.emit("credits:updated",());
@@ -404,7 +434,10 @@ pub fn run(){
   });
   Ok(())
  }).on_window_event(|window,event|{
-  if let WindowEvent::CloseRequested{api,..}=event{api.prevent_close();let _=window.hide();}
+  #[cfg(desktop)]
+   if let WindowEvent::CloseRequested{api,..}=event{api.prevent_close();let _=window.hide();}
+   #[cfg(mobile)]
+   let _=(window,event);
  })
  .invoke_handler(tauri::generate_handler![
   get_snapshot,save_settings,login_with_chatgpt,sign_out,refresh,manual_trigger,
