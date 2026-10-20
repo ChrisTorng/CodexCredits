@@ -132,6 +132,34 @@ public final class LegacyBridge {
         }
         return out;
     }
+    public static String platformStatus(Context c){
+        try{
+            android.os.PowerManager power=(android.os.PowerManager)
+                c.getSystemService(Context.POWER_SERVICE);
+            boolean exempt=power!=null && power.isIgnoringBatteryOptimizations(c.getPackageName());
+            return new JSONObject()
+                .put("exact_alarm",Scheduler.canExact(c))
+                .put("battery_exempt",exempt)
+                .put("next_alarm_ms",Scheduler.next(c))
+                .put("next_alarm_reason",Scheduler.nextReason(c))
+                .put("next_event_kind",Scheduler.prefs(c).getString("next_event_kind","auto"))
+                .put("next_event_auto_count",Scheduler.prefs(c).getInt("next_event_auto_count",0))
+                .toString();
+        }catch(Exception e){throw new IllegalStateException("Android platform state unavailable",e);}
+    }
+    public static String openSystemSettings(Context c,String kind){
+        Intent i;
+        switch(kind){
+            case "exact": i=Scheduler.exactSettings(c); break;
+            case "battery": i=new Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS); break;
+            case "app": i=new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.parse("package:"+c.getPackageName())); break;
+            default: throw new IllegalArgumentException("Unsupported settings destination");
+        }
+        i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        c.startActivity(i);
+        return "ok";
+    }
     public static String armBanked(Context c,String action){
         if("arm".equals(action))Scheduler.armBankedReset(c);
         else if("cancel".equals(action))Scheduler.cancelArmedBankedReset(c);
