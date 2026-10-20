@@ -9,7 +9,9 @@ ET.register_namespace("android",NS)
 A=lambda field:"{%s}%s"%(NS,field)
 p=argparse.ArgumentParser()
 p.add_argument("--legacy",required=True,type=Path)
-old=p.parse_args().legacy/"app/src/main/java/com/christorng/androidcodextools"
+p.add_argument("--release-keystore",type=Path,default=None)
+arguments=p.parse_args()
+old=arguments.legacy/"app/src/main/java/com/christorng/androidcodextools"
 project=Path("src-tauri/gen/android/app")
 if not project.is_dir():
     raise SystemExit("Run tauri android init first")
@@ -73,4 +75,32 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp-dnsoverhttps:4.12.0")
 }
 """)
-print("Staged native background scheduler, migration bridge, manifest and Gradle.")
+if arguments.release_keystore is not None:
+    keystore=arguments.release_keystore.expanduser().resolve(strict=True)
+    props=project.parent/"keystore.properties"
+    props.write_text("keyAlias=androiddebugkey\npassword=android\nstoreFile="+str(keystore)+"\n")
+    with gradle.open("a") as f:
+        f.write("""
+android {
+    signingConfigs {
+        create("legacyUpgrade") {
+            val props = java.util.Properties().apply {
+                load(java.io.FileInputStream(rootProject.file("keystore.properties")))
+            }
+            keyAlias = props["keyAlias"] as String
+            keyPassword = props["password"] as String
+            storeFile = file(props["storeFile"] as String)
+            storePassword = props["password"] as String
+        }
+    }
+    buildTypes {
+        getByName("release") {
+            signingConfig = signingConfigs.getByName("legacyUpgrade")
+            // JNI looks up LegacyBridge by exact class and method names.
+            isMinifyEnabled = false
+        }
+    }
+}
+""")
+print("Staged Android background scheduler, migration and release signing.")
+
