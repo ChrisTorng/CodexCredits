@@ -51,3 +51,7 @@ pub fn arm_banked(armed:bool)->Result<(),String>{
 pub fn banked_armed()->Result<bool,String>{
     Ok(call("bankedArmed",&[])?.as_deref()==Some("true"))
 }
+pub fn platform_status()->Result<serde_json::Value,String>{
+    serde_json::from_str(&call("platformStatus",&[])?.ok_or("無 Android 狀態")?).map_err(|e|e.to_string())
+}
+pub fn open_system_settings(kind:&str)->Result<(),String>{call("openSystemSettings",&[kind]).map(|_|())}
