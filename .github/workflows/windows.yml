@@ -1,7 +1,7 @@
 name: Windows Build
 on:
   push:
-    branches: [main]
+    branches: [main, android-parity]
   workflow_dispatch:
 permissions:
   contents: read
