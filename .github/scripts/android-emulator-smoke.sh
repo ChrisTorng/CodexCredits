@@ -33,7 +33,15 @@ echo "Emulator ABI: $(adb shell getprop ro.product.cpu.abi)"
 echo "Installing APK: $apk"
 adb install -r "$apk"
 adb logcat -c
-echo "Starting $package"
+echo "Launching pure Java diagnostic activity before the Rust backend"
+adb shell am start -W -n "$package/.StartupDiagnosticActivity"
+sleep 3
+if ! adb shell pidof "$package"; then
+  echo "::error::Native diagnostic launcher failed"
+  exit 1
+fi
+echo "Native diagnostic Activity survived startup."
+echo "Starting $package Tauri Activity"
 adb shell am start -W -n "$package/.MainActivity"
 sleep 12
 
@@ -50,3 +58,37 @@ if ! adb shell pidof "$package"; then
   exit 1
 fi
 echo "Android app process survived second startup."
+
+# Repeat boot with representative old-app data. No real credentials are used,
+# and the scheduler is OFF, so this fixture cannot consume quota.
+echo "=== Testing legacy SharedPreferences migration on a fresh app DB ==="
+adb shell am force-stop "$package"
+adb shell pm clear "$package" >/dev/null
+cat > legacy-app-fixture.xml <<'XML'
+<?xml version="1.0" encoding="utf-8" standalone="yes"?>
+<map>
+  <string name="scheduler_mode">off</string>
+  <int name="sample_interval_minutes" value="15" />
+  <string name="theme_mode">system</string>
+  <string name="schedule_weekly_v2">[{"id":"legacy-01","enabled":true,"hour":6,"minute":0,"autoCount":3,"days":"1111111"}]</string>
+  <string name="schedule_day_overrides_v2">{"2026-10-21":{"enabled":false,"rules":[]}}</string>
+  <string name="usage_samples_v1">[{"at":1792525200000,"p":12.5,"w":22.0,"pc":true,"pr":1792543200000,"wr":1792694400000,"b":2}]</string>
+  <string name="usage_history_events_v1">[{"at":1792525200000,"type":"weekly_reset","label":"Test event","source":"legacy fixture"}]</string>
+</map>
+XML
+adb push legacy-app-fixture.xml /data/local/tmp/codexcredits-legacy-app.xml >/dev/null
+adb shell chmod 644 /data/local/tmp/codexcredits-legacy-app.xml
+adb shell run-as "$package" mkdir -p shared_prefs
+adb shell run-as "$package" cp /data/local/tmp/codexcredits-legacy-app.xml shared_prefs/app.xml
+adb logcat -c
+adb shell am start -W -n "$package/.StartupDiagnosticActivity"
+sleep 3
+adb shell am start -W -n "$package/.MainActivity"
+sleep 12
+if ! adb shell pidof "$package"; then
+  echo "::error::Android app exited during legacy data migration"
+  exit 1
+fi
+echo "Legacy data migration launched without killing the app process."
+adb shell run-as "$package" cat shared_prefs/codexcredits_startup_diagnostic.xml || true
+
