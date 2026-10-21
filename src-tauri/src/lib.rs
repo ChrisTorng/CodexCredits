@@ -379,7 +379,6 @@ async fn run_planned(s:&State,planned:engine::Next){
  }
  replan(s);
 }
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
 #[tauri::command]
 fn android_platform_status()->Result<serde_json::Value,String>{
  #[cfg(target_os="android")]
@@ -407,7 +406,10 @@ fn android_startup_checkpoint(stage:u8)->Result<(),String>{
  let _=stage;
  Ok(())
 }
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run(){
+ #[cfg(target_os="android")]
+ android_bridge::checkpoint("45 rust-run-entry");
  let mut builder=tauri::Builder::default().plugin(tauri_plugin_notification::init());
  #[cfg(desktop)]
  {
