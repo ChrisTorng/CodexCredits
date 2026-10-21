@@ -14,6 +14,32 @@ public final class StartupTrace {
 
     private StartupTrace() {}
 
+    private static final String SKIP_KEY = "skip_legacy_import_once";
+
+    public static void setSkipLegacy(Context context, boolean skip) {
+        try {
+            SharedPreferences.Editor edit = context.getApplicationContext()
+                .getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit();
+            if (skip) edit.putBoolean(SKIP_KEY, true);
+            else edit.remove(SKIP_KEY);
+            edit.commit();
+        } catch (Throwable ignored) {}
+    }
+
+    public static boolean consumeSkipLegacy(Context context) {
+        try {
+            SharedPreferences prefs = context.getApplicationContext()
+                .getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+            boolean skip = prefs.getBoolean(SKIP_KEY, false);
+            // Always consume: the next ordinary launch must import normally.
+            prefs.edit().remove(SKIP_KEY).commit();
+            return skip;
+        } catch (Throwable ignored) {
+            return false;
+        }
+    }
+
+
     public static void mark(Context context, String checkpoint) {
         try {
             context.getApplicationContext()
