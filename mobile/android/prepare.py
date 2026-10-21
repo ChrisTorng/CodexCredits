@@ -79,14 +79,14 @@ if arguments.release_keystore is not None:
     keystore=arguments.release_keystore.expanduser().resolve(strict=True)
     props=project.parent/"keystore.properties"
     props.write_text("keyAlias=androiddebugkey\npassword=android\nstoreFile="+str(keystore)+"\n")
-    # Tauri generates `import java.util.Properties` itself in newer versions.\n    # Kotlin rejects a duplicate import as an ambiguous/conflicting import.\n    source = gradle.read_text()\n    imports = "".join(\n        f"import {name}" + chr(10)\n        for name in ("java.util.Properties", "java.io.FileInputStream")\n        if f"import {name}" not in source\n    )\n    if imports:\n        gradle.write_text(imports + source)
+    # Fully qualified JDK classes avoid conflicts with Tauri/AGP Kotlin imports.
     with gradle.open("a") as f:
         f.write("""
 android {
     signingConfigs {
         create("legacyUpgrade") {
-            val props = Properties().apply {
-                load(FileInputStream(rootProject.file("keystore.properties")))
+            val props = java.util.Properties().apply {
+                load(java.io.FileInputStream(rootProject.file("keystore.properties")))
             }
             keyAlias = props["keyAlias"] as String
             keyPassword = props["password"] as String
