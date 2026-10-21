@@ -30,6 +30,11 @@ fn call(method:&str,args:&[&str])->Result<Option<String>,String>{
     let output=env.get_string(&jstring).map_err(|e|e.to_string())?;
     Ok(Some(output.to_string_lossy().into_owned()))
 }
+/// Startup breadcrumbs are best-effort. No raw settings or credentials cross
+/// this channel; the native launcher can show the final stage after a crash.
+pub fn checkpoint(phase:&str){
+    let _=call("startupCheckpoint",&[phase]);
+}
 pub fn export_legacy()->Result<serde_json::Value,String>{
     serde_json::from_str(&call("exportLegacy",&[])?.ok_or("無舊版資料")?)
         .map_err(|e|format!("舊版設定格式有誤: {e}"))
