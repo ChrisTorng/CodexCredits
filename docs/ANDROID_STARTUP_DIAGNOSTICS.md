@@ -1,10 +1,32 @@
-# Android v2.0.1 啟動診斷說明
+# Android 啟動問題修復與診斷（v2.0.2）
 
-此診斷版是為了排查「原版 Android App 覆蓋升級後，開啟 CodexCredits 立即閃退」問題。它不是確認已修復閃退的正式版。
+## v2.0.2 根因與修正
+
+實機 v2.0.1 檢查：\`SharedPreferences\` 37 欄位、\`usage_samples_v1\` 582 筆、
+\`usage_history_events_v1\` 3 筆、每週排程 1 筆、Android Keystore 4 個可解密欄位，
+且 \`LegacyBridge.exportLegacy()\` 執行成功。上次啟動最後停在
+\`44 native-sampling-ready\`，沒有到達 Rust \`.setup()\` 的 \`50\`。
+
+程式碼發現誤把 \`#[cfg_attr(mobile, tauri::mobile_entry_point)]\`
+套在 \`android_platform_status()\` 命令而非 \`pub fn run()\`。
+Tauri 官方巨集會從所標註函式產生 Android 進入點，故可編譯出 APK，
+但 Android 端沒有執行建立 Builder 的 \`run()\`，無法初始化主畫面。
+v2.0.2 將巨集移至 \`run()\`，補上 \`45 rust-run-entry\` 標記、
+\`mobile/android/check_entrypoint.py\` 靜態驗證，
+並強化模擬器檢查，必須讀到 Rust 完成 \`.setup()\` 的節點，
+不能再僅以程序存活判斷成功。
+
+v2.0.2 的 Android App ID 和原始簽章均維持不變，
+版號為 2000002，可直接從 v2.0.1 或 v2.0.0 覆蓋安裝，
+不必清除資料。實機端仍需要確認 UI 與原始設定完整性。
+
+
+
+此含診斷功能的版本是為了排查「原版 Android App 覆蓋升級後，開啟 CodexCredits 立即閃退」問題。它不是確認已修復閃退的正式版。
 
 ## 安裝
 
-- 安裝與舊版相同 package ID `com.christorng.androidcodextools`、相同簽章憑證的 `CodexCredits-Android-v2.0.1-diagnostic-arm64.apk`，可以原地更新 v2.0.0（版本碼由 2000000 增至 2000001）。
+- 安裝與舊版相同 package ID `com.christorng.androidcodextools`、相同簽章憑證的 `CodexCredits-Android-v2.0.2-fixed-arm64.apk`，可以原地更新 v2.0.0（版本碼由 2000000 增至 2000002）。
 - **不要清除資料、解除安裝，或關閉既有排程。** 診斷工具不修改原本 `app`、`secure_tokens` 設定或刪除資料。
 - 啟動時先出現原生 Java 診斷頁，而不是 Tauri 主畫面。沒有自動繼續；請自行逐項點擊。
 
@@ -22,6 +44,7 @@
 | `00` | 原生診斷頁載入 |
 | `01` ～ `03` | 三段舊資料診斷執行中／已結束 |
 | `40` | 使用者要求啟動 Tauri |
+| `45` | Android Rust 入口呼叫真正的 `run()`（發生順序可能與 Activity 回呼交錯） |
 | `41` | MainActivity 即將執行 Tauri 的 onCreate |
 | `42` | Tauri Activity onCreate 返回 |
 | `43` | 原生通知頻道建立成功 |
@@ -46,5 +69,5 @@
 
 ## CI
 
-- `ChrisTorng/android-codex-tools/.github/workflows/codexcredits-diagnostic.yml`：以原 App 簽章建置 ARM64 升級 APK，驗證包名與簽章，再附加至獨立 diagnostic GitHub Release。
+- `ChrisTorng/android-codex-tools/.github/workflows/codexcredits-startup-fix.yml`：以原 App 簽章建置 ARM64 升級 APK，驗證包名與簽章，再附加至獨立 diagnostic GitHub Release。
 - `ChrisTorng/android-codex-tools/.github/workflows/codexcredits-diagnostic-emulator.yml`：於 Android 15 x86_64 模擬器確認原生診斷頁、Tauri 首次/第二次啟動及使用仿造舊版 SharedPreferences 的資料匯入。模擬器無法等同實機 Keystore、原先加密 Token 或實際 ARM64 OEM 環境。
