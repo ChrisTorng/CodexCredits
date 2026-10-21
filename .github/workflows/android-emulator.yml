@@ -1,0 +1,102 @@
+name: Android emulator startup smoke test
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'mobile/android/**'
+      - 'src-tauri/src/**'
+      - 'src-tauri/tauri.android.conf.json'
+      - '.github/workflows/android-emulator.yml'
+permissions:
+  contents: read
+jobs:
+  emulator-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: ChrisTorng/android-codex-tools
+          ref: 7055017ca542b66db8716b458ab8534aa563ebc8
+          path: legacy
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-linux-android
+      - name: Install SDK and NDK
+        run: |
+          SDKMANAGER=/usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"
+      - name: Prepare PNG icons
+        run: |
+          python3 -m pip install --quiet Pillow
+          python3 - <<'PY'
+          from PIL import Image
+          from pathlib import Path
+          p=Path("src-tauri/icons")
+          source=Image.open(p/"icon.ico").convert("RGBA")
+          for filename,size in (("icon.png",512),("128x128.png",128),("32x32.png",32)):
+              source.resize((size,size),Image.Resampling.LANCZOS).save(p/filename)
+          PY
+      - run: npm install
+      - name: Initialize and prepare Android app
+        run: |
+          export NDK_HOME="$ANDROID_HOME/ndk/27.2.12479018"
+          npm run tauri -- android init --ci --skip-targets-install --config src-tauri/tauri.android.conf.json
+          python3 mobile/android/prepare.py --legacy legacy
+      - name: Compile Android x86_64 debug APK
+        run: |
+          export NDK_HOME="$ANDROID_HOME/ndk/27.2.12479018"
+          npm run tauri -- android build --debug --apk --target x86_64 --config src-tauri/tauri.android.conf.json
+      - name: Emulator launch test (clean app data)
+        id: device
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          target: default
+          arch: x86_64
+          profile: pixel_6
+          disk-size: 4G
+          ram-size: 2048M
+          disable-animations: true
+          script: |
+            set -eu
+            APK=$(find src-tauri/gen/android/app/build/outputs/apk -type f -name '*.apk' | head -n 1)
+            adb install -r "$APK"
+            adb logcat -c
+            adb shell am start -n com.christorng.androidcodextools/.MainActivity
+            sleep 12
+            adb logcat -d -v threadtime > android-emulator-launch.log
+            adb logcat -b crash -d -v threadtime > android-emulator-crash.log
+            if ! adb shell pidof com.christorng.androidcodextools; then
+              echo "::error::Android app exited during initial startup"
+              grep -Ei -A 35 'FATAL EXCEPTION|signal 6|SIGABRT|CodexCredits|RustStdoutStderr|AndroidRuntime' android-emulator-launch.log | tail -n 200 || true
+              exit 1
+            fi
+            echo 'Android app process survived first 12 seconds.'
+            adb shell am force-stop com.christorng.androidcodextools
+            adb shell am start -n com.christorng.androidcodextools/.MainActivity
+            sleep 8
+            if ! adb shell pidof com.christorng.androidcodextools; then
+              echo "::error::Android app exited on second startup"
+              exit 1
+            fi
+            echo 'Android app process survived second startup.'
+      - name: Upload startup crash evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-emulator-startup-log
+          path: |
+            android-emulator-launch.log
+            android-emulator-crash.log
+          if-no-files-found: ignore
