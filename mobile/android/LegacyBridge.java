@@ -18,6 +18,11 @@ public final class LegacyBridge {
     private static final String TAG="CodexCreditsMigration";
     private LegacyBridge(){}
 
+    /** Consume a one-launch, read-only diagnostic bypass of legacy migration. */
+    public static String consumeSkipLegacy(Context c){
+        return Boolean.toString(StartupTrace.consumeSkipLegacy(c));
+    }
+
     /** Debug checkpoint only: no token values, account IDs, or preference data. */
     public static String startupCheckpoint(Context c,String phase){
         StartupTrace.mark(c,phase);
