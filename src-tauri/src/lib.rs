@@ -429,11 +429,13 @@ pub fn run(){
   #[cfg(target_os="android")]
   android_bridge::checkpoint("52 sqlite-opened");
   #[cfg(target_os="android")]
-  android_bridge::checkpoint("53 legacy-import-begin");
+  let skip_legacy=android_bridge::consume_skip_legacy();
   #[cfg(target_os="android")]
-  let migration_error=legacy::import(&db).err();
+  android_bridge::checkpoint(if skip_legacy{"53 legacy-import-skipped-by-user"}else{"53 legacy-import-begin"});
   #[cfg(target_os="android")]
-  android_bridge::checkpoint(if migration_error.is_some(){"54 legacy-import-error-returned"}else{"54 legacy-import-ok"});
+  let migration_error=if skip_legacy{None}else{legacy::import(&db).err()};
+  #[cfg(target_os="android")]
+  android_bridge::checkpoint(if skip_legacy{"54 legacy-import-skipped"}else if migration_error.is_some(){"54 legacy-import-error-returned"}else{"54 legacy-import-ok"});
   let settings=storage::get_settings(&db);
   #[cfg(target_os="android")]
   android_bridge::checkpoint("55 settings-loaded");
