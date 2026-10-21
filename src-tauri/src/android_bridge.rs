@@ -35,6 +35,11 @@ fn call(method:&str,args:&[&str])->Result<Option<String>,String>{
 pub fn checkpoint(phase:&str){
     let _=call("startupCheckpoint",&[phase]);
 }
+/// Return the read-only, one-launch migration bypass chosen in the native
+/// diagnostic screen. It does NOT set the migration-done SQLite marker.
+pub fn consume_skip_legacy()->bool{
+    call("consumeSkipLegacy",&[]).ok().flatten().as_deref()==Some("true")
+}
 pub fn export_legacy()->Result<serde_json::Value,String>{
     serde_json::from_str(&call("exportLegacy",&[])?.ok_or("無舊版資料")?)
         .map_err(|e|format!("舊版設定格式有誤: {e}"))
