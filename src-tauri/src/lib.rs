@@ -437,6 +437,7 @@ pub fn run(){
      "quit"=>app.exit(0),_=>{}
    }).build(app)?;
   }
+  #[cfg(not(target_os="android"))]
   tauri::async_runtime::spawn(async move{
    // First obtain a fresh quota after restart; never replay old persisted alarms.
    if token().is_ok(){
@@ -479,6 +480,17 @@ pub fn run(){
      run_planned(&state,next).await;
      let _=handle.emit("credits:updated",());
     }
+   }
+  });
+  #[cfg(target_os="android")]
+  tauri::async_runtime::spawn(async move {
+   // Android's native AlarmManager/JobScheduler already runs in the background.
+   // Do not keep a second, two-second polling loop alive in the Tauri process.
+   if token().is_ok() {
+    if let Err(e)=refresh_internal(&state,true).await{
+     *state.error.lock().unwrap()=Some(e);
+    }
+    let _=handle.emit("credits:updated",());
    }
   });
   Ok(())
