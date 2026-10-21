@@ -23,8 +23,17 @@ fn call(method:&str,args:&[&str])->Result<Option<String>,String>{
     for s in &strings{values.push(JValue::Object(s));}
     let sig=format!("(Landroid/content/Context;{})Ljava/lang/String;",
         "Ljava/lang/String;".repeat(args.len()));
-    let value=env.call_static_method(&class,method,&sig,&values)
-        .and_then(|v|v.l()).map_err(|e|format!("Android {method}: {e}"))?;
+    // A Java exception raised during JNI lookup (especially NoSuchMethodError)
+    // must be cleared before detaching this thread. Otherwise an optional
+    // checkpoint can crash the entire app instead of reporting a harmless error.
+    let value=match env.call_static_method(&class,method,&sig,&values)
+        .and_then(|v|v.l()){
+        Ok(value)=>value,
+        Err(error)=>{
+            let _=env.exception_clear();
+            return Err(format!("Android {method}: {error}"));
+        }
+    };
     if value.is_null(){return Ok(None);}
     let jstring=JString::from(value);
     let output=env.get_string(&jstring).map_err(|e|e.to_string())?;
