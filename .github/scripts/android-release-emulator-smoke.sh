@@ -2,7 +2,7 @@
 # Release APK is deliberately NOT debuggable: never use 'adb run-as' here.
 # Verify startup from Activity/UI evidence available on unmodified Android.
 set -euo pipefail
-cd "$(cd "$(dirname "\${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 package=com.christorng.androidcodextools
 apk_dir="$PWD/src-tauri/gen/android/app/build/outputs/apk"
 
