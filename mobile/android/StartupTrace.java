@@ -92,15 +92,58 @@ public final class StartupTrace {
     }
 
 
-    public static void mark(Context context, String checkpoint) {
+    private static final String HISTORY = "checkpoint_history";
+
+    private static int stageNumber(String checkpoint) {
         try {
-            context.getApplicationContext()
-                .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                .edit()
-                .putString(KEY, checkpoint)
-                .commit();
+            if (checkpoint.length() < 2) return -1;
+            return Integer.parseInt(checkpoint.substring(0, 2));
         } catch (Throwable ignored) {
-            // A diagnostic facility must never become another startup crash.
+            return -1;
+        }
+    }
+
+    /**
+     * Maintain the *highest* phase reached on this launch. MainActivity's
+     * onCreate may return after Rust setup already executed on a different
+     * thread; its late "44" marker must never hide a "57" or "61".
+     * Keep a short chronological phase trail separately for diagnosis.
+     */
+    public static synchronized void mark(Context context, String checkpoint) {
+        try {
+            SharedPreferences prefs = context.getApplicationContext()
+                    .getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+            String earlier = prefs.getString(KEY, "");
+            int currentStage = stageNumber(earlier);
+            int nextStage = stageNumber(checkpoint);
+            boolean restart = nextStage == 0;
+            String trail = restart ? "" : prefs.getString(HISTORY, "");
+            String candidate = trail.isEmpty() ? checkpoint : trail + "\\n" + checkpoint;
+            String[] parts = candidate.split("\\n");
+            if (parts.length > 16) {
+                StringBuilder trimmed = new StringBuilder();
+                for (int i = parts.length - 16; i < parts.length; i++) {
+                    if (trimmed.length() > 0) trimmed.append('\\n');
+                    trimmed.append(parts[i]);
+                }
+                candidate = trimmed.toString();
+            }
+            SharedPreferences.Editor editor = prefs.edit().putString(HISTORY, candidate);
+            if (restart || nextStage >= currentStage)
+                editor.putString(KEY, checkpoint);
+            editor.commit();
+        } catch (Throwable ignored) {
+            // Diagnostic recording is best-effort, never blocks app startup.
+        }
+    }
+
+    public static String history(Context context) {
+        try {
+            return context.getApplicationContext()
+                .getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .getString(HISTORY, "無先前紀錄");
+        } catch (Throwable ignored) {
+            return "診斷歷程無法讀取";
         }
     }
 
