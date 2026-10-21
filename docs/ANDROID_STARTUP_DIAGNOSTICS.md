@@ -1,4 +1,15 @@
-# Android 啟動問題修復與診斷（v2.0.2）
+# Android 啟動問題修復與診斷（v2.0.3）
+
+## v2.0.3 第一頁版本與啟動歷程
+
+- 「目前執行版本」：從 Android PackageManager 讀取 **實際安裝** 的 versionName 與 versionCode（v2.0.3 = 2000003），不是憑檔名推定。
+- 「上次啟動版本」：上一次進入原生診斷首頁時保存的版本；從 v2.0.3 **首次啟用追蹤**，第一次若沒有舊紀錄會明確顯示「無紀錄（較早版本未提供追蹤）」。無法由 Android API 憑空得知未記錄的上版版本。
+- 「上次不同版本」：跨版本升級時保存的最近前一個不同版本，後續同版反覆進入不會清空。
+- 「Android 套件」：PackageManager 用來讀取的套件識別。
+- 「上一輪經過的初始化節點」：保存最近 16 個階段，時間順序與最大階段分開呈現。先前主 Activity 的 `44` 可能在 Rust `57` 之後才寫入，將 `57` 覆蓋；新版已修正這個競態，較低的階段不再覆蓋較高的紀錄。
+- 額外提供「進階測試：只開主程式（本次略過舊資料匯入）」按鈕，用來區分啟動錯誤是否源自歷史匯入。**僅本次**有效，不修改 `android_legacy_import_v1` 完成旗標、不清除資料；下次一般啟動仍會匯入。
+
+診斷的版本及節點紀錄與原始 `SharedPreferences("app")`、`secure_tokens` 分開儲存在 `codexcredits_startup_diagnostic` 中，僅含版號與常數階段，不含任何憑證。
 
 ## v2.0.2 根因與修正
 
@@ -26,7 +37,7 @@ v2.0.2 的 Android App ID 和原始簽章均維持不變，
 
 ## 安裝
 
-- 安裝與舊版相同 package ID `com.christorng.androidcodextools`、相同簽章憑證的 `CodexCredits-Android-v2.0.2-fixed-arm64.apk`，可以原地更新 v2.0.0（版本碼由 2000000 增至 2000002）。
+- 安裝與舊版相同 package ID `com.christorng.androidcodextools`、相同簽章憑證的 `CodexCredits-Android-v2.0.3-diagnostic-arm64.apk`，可以原地更新 v2.0.0（版本碼由 2000000 增至 2000003）。
 - **不要清除資料、解除安裝，或關閉既有排程。** 診斷工具不修改原本 `app`、`secure_tokens` 設定或刪除資料。
 - 啟動時先出現原生 Java 診斷頁，而不是 Tauri 主畫面。沒有自動繼續；請自行逐項點擊。
 
