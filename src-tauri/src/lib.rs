@@ -404,12 +404,24 @@ pub fn run(){
  }
  builder
  .setup(|app|{
+  #[cfg(target_os="android")]
+  android_bridge::checkpoint("50 rust-setup-entered");
   let handle=app.handle().clone();
   let path=handle.path().app_data_dir()?;std::fs::create_dir_all(&path)?;
+  #[cfg(target_os="android")]
+  android_bridge::checkpoint("51 rust-data-directory-ready");
   let db=storage::open(&path.join("codexcredits.sqlite3")).map_err(std::io::Error::other)?;
   #[cfg(target_os="android")]
+  android_bridge::checkpoint("52 sqlite-opened");
+  #[cfg(target_os="android")]
+  android_bridge::checkpoint("53 legacy-import-begin");
+  #[cfg(target_os="android")]
   let migration_error=legacy::import(&db).err();
+  #[cfg(target_os="android")]
+  android_bridge::checkpoint(if migration_error.is_some(){"54 legacy-import-error-returned"}else{"54 legacy-import-ok"});
   let settings=storage::get_settings(&db);
+  #[cfg(target_os="android")]
+  android_bridge::checkpoint("55 settings-loaded");
   let armed=storage::get_meta(&db,"banked_armed");
   #[cfg(target_os="android")]
   let armed=if android_bridge::banked_armed().unwrap_or(false){Some("android-native".into())}else{armed};
@@ -425,6 +437,8 @@ pub fn run(){
    login_busy:tokio::sync::Mutex::new(())
   });
   app.manage(state.clone());
+  #[cfg(target_os="android")]
+  android_bridge::checkpoint("56 app-state-managed");
   #[cfg(desktop)]
   {
   let show=MenuItem::with_id(app,"show","顯示 Codex Tools",true,None::<&str>)?;
@@ -493,6 +507,8 @@ pub fn run(){
     let _=handle.emit("credits:updated",());
    }
   });
+  #[cfg(target_os="android")]
+  android_bridge::checkpoint("57 rust-setup-complete");
   Ok(())
  }).on_window_event(|window,event|{
   #[cfg(desktop)]
