@@ -23,6 +23,8 @@ names=["AlarmReceiver","AndroidNotifications","BackupJobService","BootReceiver",
 for name in names:
     (out/(name+".java")).write_bytes((old/(name+".java")).read_bytes())
 (out/"LegacyBridge.java").write_bytes(Path("mobile/android/LegacyBridge.java").read_bytes())
+# Required: Rust resolves LegacyBridge methods by exact JNI names at runtime.
+(project/"jni-keep.pro").write_bytes(Path("mobile/android/jni-keep.pro").read_bytes())
 # A pure-Java launcher runs before Tauri and survives failures in Rust startup.
 for name in ("StartupTrace", "StartupDiagnosticActivity"):
     (out/(name+".java")).write_bytes((Path("mobile/android")/(name+".java")).read_bytes())
@@ -105,6 +107,15 @@ with gradle.open("a") as f:
 dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.squareup.okhttp3:okhttp-dnsoverhttps:4.12.0")
+    implementation("androidx.annotation:annotation:1.9.1")
+}
+android {
+    buildTypes {
+        getByName("release") {
+            // Rust JNI methods are dynamically looked up, not called by Java.
+            proguardFiles("jni-keep.pro")
+        }
+    }
 }
 """)
 if arguments.release_keystore is not None:
