@@ -25,7 +25,7 @@ for name in names:
 (out/"LegacyBridge.java").write_bytes(Path("mobile/android/LegacyBridge.java").read_bytes())
 # A pure-Java launcher runs before Tauri and survives failures in Rust startup.
 for name in ("StartupTrace", "StartupDiagnosticActivity"):
-    (out/(name+".java")).write_bytes(Path("mobile/android"/(name+".java")).read_bytes())
+    (out/(name+".java")).write_bytes((Path("mobile/android")/(name+".java")).read_bytes())
 
 
 activity=next(project.rglob("MainActivity.kt"),None)
