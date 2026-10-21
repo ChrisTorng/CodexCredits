@@ -84,9 +84,9 @@ public final class StartupDiagnosticActivity extends Activity {
         versionInfo.setTextSize(16);
         versionInfo.setPadding(0, dp(10), 0, dp(10));
         versionInfo.setText("目前執行版本：" + versions.current
-            + "\\n上次啟動版本：" + versions.previousLaunch
-            + "\\n上次不同版本：" + versions.previousDifferent
-            + "\\nAndroid 套件：" + versions.packageName);
+            + "\n上次啟動版本：" + versions.previousLaunch
+            + "\n上次不同版本：" + versions.previousDifferent
+            + "\nAndroid 套件：" + versions.packageName);
         root.addView(versionInfo);
 
         TextView intro = new TextView(this);
