@@ -5,6 +5,7 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.net.Uri;
 import android.util.Log;
+import androidx.annotation.Keep;
 import org.json.JSONArray;
 import org.json.JSONObject;
 import java.util.Map;
@@ -14,21 +15,25 @@ import java.util.Map;
  * ScheduleConfig, receivers and jobs are compiled from the pinned legacy source.
  * Never clears the original preferences as part of migration.
  */
+@Keep
 public final class LegacyBridge {
     private static final String TAG="CodexCreditsMigration";
     private LegacyBridge(){}
 
     /** Consume a one-launch, read-only diagnostic bypass of legacy migration. */
+    @Keep
     public static String consumeSkipLegacy(Context c){
         return Boolean.toString(StartupTrace.consumeSkipLegacy(c));
     }
 
     /** Debug checkpoint only: no token values, account IDs, or preference data. */
+    @Keep
     public static String startupCheckpoint(Context c,String phase){
         StartupTrace.mark(c,phase);
         return "ok";
     }
 
+    @Keep
     public static String exportLegacy(Context c){
         try {
             SharedPreferences p=c.getSharedPreferences("app",Context.MODE_PRIVATE);
@@ -51,17 +56,21 @@ public final class LegacyBridge {
         }
     }
 
+    @Keep
     public static String readCredential(Context c,String key){
         return new SecureStore(c).get("cc2_"+key);
     }
+    @Keep
     public static String writeCredential(Context c,String key,String data){
         try { new SecureStore(c).put("cc2_"+key,data); return "ok"; }
         catch(Exception e){throw new IllegalStateException("Secure credential write failed",e);}
     }
+    @Keep
     public static String deleteCredential(Context c,String key){
         try { new SecureStore(c).put("cc2_"+key,null); return "ok"; }
         catch(Exception e){throw new IllegalStateException("Secure credential removal failed",e);}
     }
+    @Keep
     public static String syncAuth(Context c,String data){
         try{
             JSONObject value=new JSONObject(data);
@@ -77,6 +86,7 @@ public final class LegacyBridge {
             return "ok";
         }catch(Exception e){throw new IllegalStateException("Legacy auth synchronization failed",e);}
     }
+    @Keep
     public static String clearAuth(Context c){
         try{
             SecureStore s=new SecureStore(c);
@@ -85,12 +95,14 @@ public final class LegacyBridge {
             return "ok";
         }catch(Exception e){throw new IllegalStateException("Legacy auth removal failed",e);}
     }
+    @Keep
     public static String openUrl(Context c,String url){
         Intent intent=new Intent(Intent.ACTION_VIEW,Uri.parse(url));
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         c.startActivity(intent);
         return "ok";
     }
+    @Keep
     public static String syncSettings(Context c,String json){
         try {
             JSONObject s=new JSONObject(json);
@@ -146,6 +158,7 @@ public final class LegacyBridge {
         }
         return out;
     }
+    @Keep
     public static String platformStatus(Context c){
         try{
             android.os.PowerManager power=(android.os.PowerManager)
@@ -161,6 +174,7 @@ public final class LegacyBridge {
                 .toString();
         }catch(Exception e){throw new IllegalStateException("Android platform state unavailable",e);}
     }
+    @Keep
     public static String openSystemSettings(Context c,String kind){
         Intent i;
         switch(kind){
@@ -174,11 +188,13 @@ public final class LegacyBridge {
         c.startActivity(i);
         return "ok";
     }
+    @Keep
     public static String armBanked(Context c,String action){
         if("arm".equals(action))Scheduler.armBankedReset(c);
         else if("cancel".equals(action))Scheduler.cancelArmedBankedReset(c);
         return "ok";
     }
+    @Keep
     public static String bankedArmed(Context c){
         return Boolean.toString(Scheduler.isBankedResetArmed(c));
     }
