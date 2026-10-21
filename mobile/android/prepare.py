@@ -79,7 +79,7 @@ if arguments.release_keystore is not None:
     keystore=arguments.release_keystore.expanduser().resolve(strict=True)
     props=project.parent/"keystore.properties"
     props.write_text("keyAlias=androiddebugkey\npassword=android\nstoreFile="+str(keystore)+"\n")
-    # Tauri generates `import java.util.Properties` itself in newer versions.\n    # Kotlin rejects a duplicate import as an ambiguous/conflicting import.\n    source = gradle.read_text()\n    imports = "".join(\n        f"import {name}\\n".replace("\\\\n", "\\n")\n        for name in ("java.util.Properties", "java.io.FileInputStream")\n        if f"import {name}" not in source\n    )\n    if imports:\n        gradle.write_text(imports + source)
+    # Tauri generates `import java.util.Properties` itself in newer versions.\n    # Kotlin rejects a duplicate import as an ambiguous/conflicting import.\n    source = gradle.read_text()\n    imports = "".join(\n        f"import {name}" + chr(10)\n        for name in ("java.util.Properties", "java.io.FileInputStream")\n        if f"import {name}" not in source\n    )\n    if imports:\n        gradle.write_text(imports + source)
     with gradle.open("a") as f:
         f.write("""
 android {
