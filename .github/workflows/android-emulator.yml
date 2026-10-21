@@ -8,6 +8,7 @@ on:
       - 'src-tauri/src/**'
       - 'src-tauri/tauri.android.conf.json'
       - '.github/workflows/android-emulator.yml'
+      - '.github/scripts/android-emulator-smoke.sh'
 permissions:
   contents: read
 jobs:
