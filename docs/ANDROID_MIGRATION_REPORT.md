@@ -40,10 +40,11 @@
 
 ## 體積與效能
 
-- 舊版 GitHub Actions `android-codex-tools-debug` artifact **ZIP**：1,437,885 bytes（run 38876935760）；它不是未壓縮 APK 的精確大小。
+- 舊版 Android 原始 `app-debug.apk`（GitHub Actions run `39514470634`）：**1,445,499 bytes，約 1.38 MiB**；檔案已從 Artifact 解壓驗證。
 - 新版 Android ARM64 **Debug APK**：173,204,573 bytes（run 39512487363），包含大量 Rust 原生除錯符號。
 - 新版 Debug GitHub Actions artifact **ZIP**：48,384,073 bytes（同 run），不等於 APK 大小。
-- Release Rust profile 已調整 `opt-level=s`, `lto=thin`, `codegen-units=1`, `strip=symbols`, `panic=abort`，Release APK 體積以簽署後 Actions 數據為準。
+- 新版 Android `v2.0.0` ARM64 Release 簽章 APK（run `39576035103`）：**2,888,315 bytes，約 2.75 MiB**；SHA-256 `3b15ca6c101d59cd20f9d53aaeb6c3739a1d897b3e9a11e891a63d0df4cb9999`。相對舊版約 **2.0 倍／增加約 99.8%**。
+- Release Rust profile 使用 `opt-level=s`, `lto=thin`, `codegen-units=1`, `strip=symbols`, `panic=abort`，且 Android Rust 停用每 2 秒輪詢，交由原生 JobScheduler/AlarmManager 背景運作。
 - **尚無可比的真機冷啟動時間、穩態 PSS/RSS、耗電、背景喚醒耗時**。不可宣稱新架構比原生 Java 快或省記憶體；WebView 與 Rust/SQLite 有額外固定成本，體積大於 Java 原版是預期結果。
 
 建議用 Android Studio Profiler、`adb shell dumpsys meminfo com.christorng.androidcodextools`、`adb shell am force-stop` + launch time、以及固定帳號網路情境比較前後版本：冷啟動 20 次（中位數、p95）、待機前景/背景 PSS、APK bytes、安裝後 app data、24 小時任務準點率與耗電量。應區分 Debug/Release、首次 OAuth 登入後以及資料遷移後的冷啟動。
@@ -54,3 +55,10 @@
 - 原始 repo 可經 GitHub Release 提供直接下載 APK，不需自行解壓縮 ZIP。
 - 實機至少要核對舊資料與 OAuth、配額值、錨點/覆寫、Doze、鬧鐘權限、重開機、系統通知及 ntyf/網路故障；Banked Reset 及觸發請避免在實機上不小心消耗額度。
 - 在完成上述測試以前，此分支與產出的 APK 都應視為**預覽版**，不可宣稱正式功能完全等價。
+
+## 2026-10-21 發行驗證
+
+- 簽署建置：[Actions #39576035103](https://github.com/ChrisTorng/android-codex-tools/actions/runs/39576035103) 全部步驟成功；原版 signing key SHA-256 檢查、`aapt` package/version 與 `apksigner` 憑證驗證均成功。
+- 原地更新條件：`com.christorng.androidcodextools`、`versionCode=2000000`、沿用原始簽章 SHA-256 `177f5e3fed59854e4203dafe13490a75c2438b37731ff0e7af7acbfe45a8e679`；請勿先移除舊版。
+- [Release 直接下載 APK](https://github.com/ChrisTorng/android-codex-tools/releases/download/codexcredits-android-v2.0.0-preview/CodexCredits-Android-v2.0.0-arm64.apk)。
+- 成功編譯及簽章不等同實機功能完全等價；尚須驗證舊設定/歷程/OAuth 登入、Doze/重開機、通知與排程副作用。
