@@ -18,6 +18,12 @@ public final class LegacyBridge {
     private static final String TAG="CodexCreditsMigration";
     private LegacyBridge(){}
 
+    /** Debug checkpoint only: no token values, account IDs, or preference data. */
+    public static String startupCheckpoint(Context c,String phase){
+        StartupTrace.mark(c,phase);
+        return "ok";
+    }
+
     public static String exportLegacy(Context c){
         try {
             SharedPreferences p=c.getSharedPreferences("app",Context.MODE_PRIVATE);
