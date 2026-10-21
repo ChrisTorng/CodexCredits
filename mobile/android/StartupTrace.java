@@ -118,12 +118,12 @@ public final class StartupTrace {
             int nextStage = stageNumber(checkpoint);
             boolean restart = nextStage == 0;
             String trail = restart ? "" : prefs.getString(HISTORY, "");
-            String candidate = trail.isEmpty() ? checkpoint : trail + "\\n" + checkpoint;
-            String[] parts = candidate.split("\\n");
+            String candidate = trail.isEmpty() ? checkpoint : trail + "\n" + checkpoint;
+            String[] parts = candidate.split("\n");
             if (parts.length > 16) {
                 StringBuilder trimmed = new StringBuilder();
                 for (int i = parts.length - 16; i < parts.length; i++) {
-                    if (trimmed.length() > 0) trimmed.append('\\n');
+                    if (trimmed.length() > 0) trimmed.append('\n');
                     trimmed.append(parts[i]);
                 }
                 candidate = trimmed.toString();
