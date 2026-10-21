@@ -2,7 +2,7 @@
 # The emulator-runner executes each YAML script line in a fresh shell.
 # Keep all variables, error handling and crash-log capture in ONE bash process.
 set -euo pipefail
-cd "${GITHUB_WORKSPACE:?GITHUB_WORKSPACE is required}"
+cd "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 package=com.christorng.androidcodextools
 apk_dir="$PWD/src-tauri/gen/android/app/build/outputs/apk"
