@@ -30,6 +30,7 @@ public final class StartupDiagnosticActivity extends Activity {
     private boolean running = false;
     private final StringBuilder report = new StringBuilder();
     private String previous;
+    private StartupTrace.Versions versions;
     private final String[] actions = {
         "步驟 1／4：查看舊版資料項目",
         "步驟 2／4：檢查 JSON 格式",
@@ -41,6 +42,7 @@ public final class StartupDiagnosticActivity extends Activity {
         super.onCreate(state);
         // Capture last startup's marker BEFORE writing this launch's marker.
         previous = StartupTrace.last(this);
+        versions = StartupTrace.recordLaunchVersion(this);
         StartupTrace.mark(this, "00 diagnostic-screen-opened");
         installCrashBreadcrumbs();
         draw();
@@ -75,6 +77,17 @@ public final class StartupDiagnosticActivity extends Activity {
         heading.setTextSize(23);
         heading.setText("CodexCredits 啟動診斷");
         root.addView(heading);
+
+        // Place actual installed version BEFORE the instructions so it is
+        // visible immediately in the first screenshot, without any button tap.
+        TextView versionInfo = new TextView(this);
+        versionInfo.setTextSize(16);
+        versionInfo.setPadding(0, dp(10), 0, dp(10));
+        versionInfo.setText("目前執行版本：" + versions.current
+            + "\\n上次啟動版本：" + versions.previousLaunch
+            + "\\n上次不同版本：" + versions.previousDifferent
+            + "\\nAndroid 套件：" + versions.packageName);
+        root.addView(versionInfo);
 
         TextView intro = new TextView(this);
         intro.setTextSize(15);
