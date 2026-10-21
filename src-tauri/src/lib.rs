@@ -394,6 +394,19 @@ fn android_open_system_settings(kind:String)->Result<(),String>{
  #[cfg(not(target_os="android"))]
  {let _=kind;Err("僅 Android 支援".into())}
 }
+#[tauri::command]
+fn android_startup_checkpoint(stage:u8)->Result<(),String>{
+ #[cfg(target_os="android")]
+ match stage {
+  60=>android_bridge::checkpoint("60 webview-initialize-started"),
+  61=>android_bridge::checkpoint("61 local-state-loaded"),
+  62=>android_bridge::checkpoint("62 local-state-load-error"),
+  _=>return Err("無效診斷節點".into())
+ }
+ #[cfg(not(target_os="android"))]
+ let _=stage;
+ Ok(())
+}
 pub fn run(){
  let mut builder=tauri::Builder::default().plugin(tauri_plugin_notification::init());
  #[cfg(desktop)]
@@ -519,7 +532,7 @@ pub fn run(){
  .invoke_handler(tauri::generate_handler![
   get_snapshot,save_settings,login_with_chatgpt,sign_out,refresh,manual_trigger,
   banked_reset,toggle_banked_armed,ntfy_test,native_notify_test,get_local_state,get_history,get_events,
-  android_platform_status,android_open_system_settings
+  android_platform_status,android_open_system_settings,android_startup_checkpoint
  ])
  .run(tauri::generate_context!()).expect("CodexCredits could not start");
 }
