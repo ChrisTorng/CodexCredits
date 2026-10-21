@@ -53,7 +53,9 @@ public final class StartupDiagnosticActivity extends Activity {
             try {
                 String name = error.getClass().getSimpleName();
                 // Do not persist exception.getMessage(): it might include credentials.
-                StartupTrace.mark(getApplicationContext(), "99 java-uncaught-" + name);
+                String last = StartupTrace.last(getApplicationContext());
+                StartupTrace.mark(getApplicationContext(),
+                    "99 java-uncaught-" + name + " after " + last);
             } catch (Throwable ignored) {}
             if (original != null) original.uncaughtException(thread, error);
             else android.os.Process.killProcess(android.os.Process.myPid());
