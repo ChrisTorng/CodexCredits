@@ -60,6 +60,9 @@ public final class LegacyBridge {
                 secure.put("refresh_token",value.getString("refresh_token"));
             secure.put("account_id",value.getString("account_id"));
             secure.put("expires_at_ms",Long.toString(value.getLong("expires_at")*1000L));
+            // A first-time login may happen after MainActivity.onCreate. Without this,
+            // the native sampling job remains absent until the next app restart.
+            Scheduler.scheduleQuotaSampling(c);
             return "ok";
         }catch(Exception e){throw new IllegalStateException("Legacy auth synchronization failed",e);}
     }
