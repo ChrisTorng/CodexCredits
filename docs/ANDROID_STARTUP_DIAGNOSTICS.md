@@ -1,8 +1,26 @@
-# Android 啟動問題修復與診斷（v2.0.3）
+# Android 啟動問題修復與診斷（v2.0.4）
+
+## v2.0.4 Release 原生 JNI 缺失修正
+
+Android 15 x86_64 **Release** 模擬器重現 v2.0.2 啟動閃退，crash buffer 紀錄：
+
+```text
+java.lang.NoSuchMethodError:
+  no static method "Lcom/christorng/androidcodextools/LegacyBridge;.startupCheckpoint(
+    Landroid/content/Context;Ljava/lang/String;)Ljava/lang/String;"
+```
+
+這解釋了 Debug 模擬器可以進到 `61 local-state-loaded`，而 Release APK 卻閃退：Release Dex 缺少由 Rust 透過 JNI 動態呼叫的方法。v2.0.4 為 `LegacyBridge` 的所有 JNI 公開靜態方法加 `androidx.annotation.Keep`，加上 `jni-keep.pro` 的 `-keep` 條件，並在 JNI 錯誤時先清除 Java pending exception，以免一個診斷節點問題導致行程結束。
+
+另新增 `mobile/android/check_dex_jni.py`，於 Release APK 編譯完成後檢查 `classes*.dex` **實際包含**所有由 Rust 呼叫的原生橋接方法名稱；不能只以編譯成功當作放行條件。
+
+此版同時保留第一頁顯示目前／上次執行版本、最後 16 個啟動節點與可選的單次略過舊資料匯入模式。
+
+
 
 ## v2.0.3 第一頁版本與啟動歷程
 
-- 「目前執行版本」：從 Android PackageManager 讀取 **實際安裝** 的 versionName 與 versionCode（v2.0.3 = 2000003），不是憑檔名推定。
+- 「目前執行版本」：從 Android PackageManager 讀取 **實際安裝** 的 versionName 與 versionCode（v2.0.4 = 2000004），不是憑檔名推定。
 - 「上次啟動版本」：上一次進入原生診斷首頁時保存的版本；從 v2.0.3 **首次啟用追蹤**，第一次若沒有舊紀錄會明確顯示「無紀錄（較早版本未提供追蹤）」。無法由 Android API 憑空得知未記錄的上版版本。
 - 「上次不同版本」：跨版本升級時保存的最近前一個不同版本，後續同版反覆進入不會清空。
 - 「Android 套件」：PackageManager 用來讀取的套件識別。
@@ -37,7 +55,7 @@ v2.0.2 的 Android App ID 和原始簽章均維持不變，
 
 ## 安裝
 
-- 安裝與舊版相同 package ID `com.christorng.androidcodextools`、相同簽章憑證的 `CodexCredits-Android-v2.0.3-diagnostic-arm64.apk`，可以原地更新 v2.0.0（版本碼由 2000000 增至 2000003）。
+- 安裝與舊版相同 package ID `com.christorng.androidcodextools`、相同簽章憑證的 `CodexCredits-Android-v2.0.4-jni-fixed-arm64.apk`，可以原地更新 v2.0.0（版本碼由 2000000 增至 2000004）。
 - **不要清除資料、解除安裝，或關閉既有排程。** 診斷工具不修改原本 `app`、`secure_tokens` 設定或刪除資料。
 - 啟動時先出現原生 Java 診斷頁，而不是 Tauri 主畫面。沒有自動繼續；請自行逐項點擊。
 
