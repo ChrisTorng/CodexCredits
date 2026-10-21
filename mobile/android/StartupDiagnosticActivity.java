@@ -30,6 +30,7 @@ public final class StartupDiagnosticActivity extends Activity {
     private boolean running = false;
     private final StringBuilder report = new StringBuilder();
     private String previous;
+    private String previousTrail;
     private StartupTrace.Versions versions;
     private final String[] actions = {
         "步驟 1／4：查看舊版資料項目",
@@ -42,6 +43,7 @@ public final class StartupDiagnosticActivity extends Activity {
         super.onCreate(state);
         // Capture last startup's marker BEFORE writing this launch's marker.
         previous = StartupTrace.last(this);
+        previousTrail = StartupTrace.history(this);
         versions = StartupTrace.recordLaunchVersion(this);
         StartupTrace.mark(this, "00 diagnostic-screen-opened");
         installCrashBreadcrumbs();
@@ -121,7 +123,9 @@ public final class StartupDiagnosticActivity extends Activity {
 
         scroll.addView(root);
         setContentView(scroll);
-        report.append("開始診斷。\n先前啟動節點：").append(previous).append("\n");
+        report.append("開始診斷。\n先前啟動節點：").append(previous)
+            .append("\n上一輪經過的初始化節點（依實際執行順序）：\n")
+            .append(previousTrail).append("\n");
         update();
     }
 
