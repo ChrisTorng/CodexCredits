@@ -23,6 +23,10 @@ names=["AlarmReceiver","AndroidNotifications","BackupJobService","BootReceiver",
 for name in names:
     (out/(name+".java")).write_bytes((old/(name+".java")).read_bytes())
 (out/"LegacyBridge.java").write_bytes(Path("mobile/android/LegacyBridge.java").read_bytes())
+# A pure-Java launcher runs before Tauri and survives failures in Rust startup.
+for name in ("StartupTrace", "StartupDiagnosticActivity"):
+    (out/(name+".java")).write_bytes(Path("mobile/android"/(name+".java")).read_bytes())
+
 
 activity=next(project.rglob("MainActivity.kt"),None)
 if activity is None:raise SystemExit("Missing generated MainActivity.kt")
@@ -33,9 +37,13 @@ if "import android.os.Bundle" not in prefix:
 activity.write_text(prefix+"""
 class MainActivity : TauriActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
+        StartupTrace.mark(this, "41 tauri-activity-before-super")
         super.onCreate(savedInstanceState)
+        StartupTrace.mark(this, "42 tauri-activity-after-super")
         AndroidNotifications.ensureChannel(this)
+        StartupTrace.mark(this, "43 notification-channel-ready")
         Scheduler.scheduleQuotaSampling(this)
+        StartupTrace.mark(this, "44 native-sampling-ready")
     }
 }
 """)
@@ -52,6 +60,30 @@ app=root.find("application")
 if app is None:raise SystemExit("Missing application")
 app.set(A("allowBackup"),"false")
 app.set(A("usesCleartextTraffic"),"true")
+# Replace only the icon-launch intent; leave any deep-link intent filters intact.
+main_activities = [e for e in app.findall("activity")
+    if e.get(A("name"), "").endswith(".MainActivity")]
+if len(main_activities) != 1:
+    raise SystemExit("Expected exactly one generated MainActivity")
+main_activity = main_activities[0]
+launcher_count = 0
+for intent in list(main_activity.findall("intent-filter")):
+    actions = {e.get(A("name")) for e in intent.findall("action")}
+    cats = {e.get(A("name")) for e in intent.findall("category")}
+    if "android.intent.action.MAIN" in actions and "android.intent.category.LAUNCHER" in cats:
+        main_activity.remove(intent)
+        launcher_count += 1
+if launcher_count != 1:
+    raise SystemExit(f"Expected one launcher intent on MainActivity, found {launcher_count}")
+diagnostic = ET.SubElement(app, "activity", {
+    A("name"): ".StartupDiagnosticActivity",
+    A("exported"): "true",
+    A("theme"): "@android:style/Theme.Material.Light.NoActionBar",
+    A("label"): "Codex Tools 啟動診斷",
+})
+launcher = ET.SubElement(diagnostic, "intent-filter")
+ET.SubElement(launcher, "action", {A("name"): "android.intent.action.MAIN"})
+ET.SubElement(launcher, "category", {A("name"): "android.intent.category.LAUNCHER"})
 for name in ("AlarmReceiver","BootReceiver"):
     e=ET.SubElement(app,"receiver",{A("name"):"."+name,
         A("exported"):"true" if name=="BootReceiver" else "false"})
