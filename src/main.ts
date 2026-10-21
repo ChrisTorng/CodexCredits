@@ -550,13 +550,16 @@ obs.observe($("app"));
 void listen("credits:updated",async()=>{await Promise.allSettled([load(),loadHistory()]);});
 type LocalState={snapshot:Snapshot;history:Sample[];events:Event[]};
 async function initialize(){
+ if(androidRuntime)void invoke("android_startup_checkpoint",{stage:60}).catch(()=>{});
  // Load persisted samples and events first, independent of OAuth, quota API,
  // or slow startup network operations. Never require "更新配額" to restore history.
  try{
   const cached=await call<LocalState>("get_local_state");
   snapshot=cached.snapshot;samples=cached.history;events=cached.events;
   render();
+  if(androidRuntime)void invoke("android_startup_checkpoint",{stage:61}).catch(()=>{});
  }catch(e){
+  if(androidRuntime)void invoke("android_startup_checkpoint",{stage:62}).catch(()=>{});
   toast("讀取本機資料失敗："+String(e));
   await Promise.allSettled([loadHistory(),load()]);
  }
