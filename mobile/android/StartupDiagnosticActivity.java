@@ -25,6 +25,7 @@ public final class StartupDiagnosticActivity extends Activity {
     private TextView heading;
     private TextView log;
     private Button button;
+    private Button bypassButton;
     private ProgressBar busy;
     private int stage = 0;
     private boolean running = false;
@@ -110,6 +111,19 @@ public final class StartupDiagnosticActivity extends Activity {
         button.setOnClickListener(v -> next());
         root.addView(button);
 
+        bypassButton = new Button(this);
+        bypassButton.setAllCaps(false);
+        bypassButton.setText("進階測試：只開主程式（本次略過舊資料匯入）");
+        bypassButton.setOnClickListener(v -> launchMain(true));
+        root.addView(bypassButton);
+
+        TextView bypassExplanation = new TextView(this);
+        bypassExplanation.setTextSize(13);
+        bypassExplanation.setText("用來確認閃退是否與舊資料匯入有關。只略過這一次，"
+                + "不會刪除舊設定、歷史或憑證，也不會標記匯入完成。"
+                + "如果主程式因此能開啟，下次正常啟動仍會嘗試匯入。");
+        root.addView(bypassExplanation);
+
         TextView label = new TextView(this);
         label.setText("檢查結果（僅類型、筆數、最後初始化階段）");
         label.setTextSize(17);
@@ -131,6 +145,7 @@ public final class StartupDiagnosticActivity extends Activity {
 
     private void update() {
         button.setEnabled(!running && stage < actions.length);
+        bypassButton.setEnabled(!running && stage < actions.length);
         button.setText(stage < actions.length ? actions[stage] : "已提交啟動請求");
         busy.setVisibility(running ? View.VISIBLE : View.GONE);
         log.setText(report.toString());
@@ -167,18 +182,25 @@ public final class StartupDiagnosticActivity extends Activity {
         if (stage == 0) runProbe(1, "舊版 SharedPreferences", this::probePreferences);
         else if (stage == 1) runProbe(2, "舊版 JSON 格式", this::probeJson);
         else if (stage == 2) runProbe(3, "Keystore／匯出橋接", this::probeCredentials);
-        else if (stage == 3) {
-            StartupTrace.mark(this, "40 user-requested-main-activity");
-            append("▶ 已請求啟動 Tauri。下一次開啟本診斷頁可查上次進度。");
-            stage = 4;
-            update();
-            try {
-                Intent intent = new Intent(this, MainActivity.class);
-                startActivity(intent);
-            } catch (Throwable error) {
-                StartupTrace.mark(this, "40 main-launch-failed-" + error.getClass().getSimpleName());
-                append("無法開啟主畫面：" + error.getClass().getSimpleName());
-            }
+        else if (stage == 3) launchMain(false);
+    }
+
+    private void launchMain(boolean skipLegacyImport) {
+        if (running || stage >= 4) return;
+        StartupTrace.setSkipLegacy(this, skipLegacyImport);
+        StartupTrace.mark(this, skipLegacyImport
+            ? "40 user-requested-main-skip-import" : "40 user-requested-main-activity");
+        append(skipLegacyImport
+            ? "▶ 本次略過舊資料匯入，啟動 Tauri；不會標記匯入完成。"
+            : "▶ 已請求啟動 Tauri。重新點圖示可查上次進度。");
+        stage = 4;
+        update();
+        try {
+            Intent intent = new Intent(this, MainActivity.class);
+            startActivity(intent);
+        } catch (Throwable error) {
+            StartupTrace.mark(this, "40 main-launch-failed-" + error.getClass().getSimpleName());
+            append("無法開啟主畫面：" + error.getClass().getSimpleName());
         }
     }
 
