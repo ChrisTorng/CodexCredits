@@ -50,6 +50,15 @@ if ! adb shell pidof "$package"; then
   exit 1
 fi
 echo "Android app process survived initial startup."
+# Process existence is NOT proof that the Rust/Tauri app started.
+# Check the marker emitted from the real Rust .setup() or WebView.
+boot_marker="$(adb shell run-as "$package" cat shared_prefs/codexcredits_startup_diagnostic.xml || true)"
+echo "Initial Rust startup marker: $boot_marker"
+if ! printf '%s' "$boot_marker" | grep -Eq '(57 rust-setup-complete|6[012] [a-z-]+)'; then
+  echo "::error::Android process survived but Rust/Tauri never finished setup"
+  exit 1
+fi
+echo "Verified Rust/Tauri setup executed."
 adb shell am force-stop "$package"
 adb shell am start -W -n "$package/.MainActivity"
 sleep 8
@@ -90,5 +99,11 @@ if ! adb shell pidof "$package"; then
   exit 1
 fi
 echo "Legacy data migration launched without killing the app process."
-adb shell run-as "$package" cat shared_prefs/codexcredits_startup_diagnostic.xml || true
+legacy_marker="$(adb shell run-as "$package" cat shared_prefs/codexcredits_startup_diagnostic.xml || true)"
+echo "Migration Rust startup marker: $legacy_marker"
+if ! printf '%s' "$legacy_marker" | grep -Eq '(57 rust-setup-complete|6[012] [a-z-]+)'; then
+  echo "::error::Seeded legacy migration failed to reach successful Rust setup"
+  exit 1
+fi
+echo "Seeded old-app data reached completed Rust setup."
 
