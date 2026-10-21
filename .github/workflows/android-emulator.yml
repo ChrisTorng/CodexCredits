@@ -68,29 +68,7 @@ jobs:
           disk-size: 4G
           ram-size: 2048M
           disable-animations: true
-          script: |
-            set -eu
-            APK=$(find src-tauri/gen/android/app/build/outputs/apk -type f -name '*.apk' | head -n 1)
-            adb install -r "$APK"
-            adb logcat -c
-            adb shell am start -n com.christorng.androidcodextools/.MainActivity
-            sleep 12
-            adb logcat -d -v threadtime > android-emulator-launch.log
-            adb logcat -b crash -d -v threadtime > android-emulator-crash.log
-            if ! adb shell pidof com.christorng.androidcodextools; then
-              echo "::error::Android app exited during initial startup"
-              grep -Ei -A 35 'FATAL EXCEPTION|signal 6|SIGABRT|CodexCredits|RustStdoutStderr|AndroidRuntime' android-emulator-launch.log | tail -n 200 || true
-              exit 1
-            fi
-            echo 'Android app process survived first 12 seconds.'
-            adb shell am force-stop com.christorng.androidcodextools
-            adb shell am start -n com.christorng.androidcodextools/.MainActivity
-            sleep 8
-            if ! adb shell pidof com.christorng.androidcodextools; then
-              echo "::error::Android app exited on second startup"
-              exit 1
-            fi
-            echo 'Android app process survived second startup.'
+          script: bash .github/scripts/android-emulator-smoke.sh
       - name: Upload startup crash evidence
         if: always()
         uses: actions/upload-artifact@v4
