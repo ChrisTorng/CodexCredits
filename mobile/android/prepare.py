@@ -77,21 +77,17 @@ dependencies {
 """)
 if arguments.release_keystore is not None:
     keystore=arguments.release_keystore.expanduser().resolve(strict=True)
-    props=project.parent/"keystore.properties"
-    props.write_text("keyAlias=androiddebugkey\npassword=android\nstoreFile="+str(keystore)+"\n")
-    # Fully qualified JDK classes avoid conflicts with Tauri/AGP Kotlin imports.
-    with gradle.open("a") as f:
-        f.write("""
+    # The original keystore is verified by CI before this step.  No Gradle
+    # Kotlin DSL package imports or ambiguous `java` receiver are needed.
+    # The Android debug-key password is intentionally the original public default.
+    signing = """
 android {
     signingConfigs {
         create("legacyUpgrade") {
-            val props = java.util.Properties().apply {
-                load(java.io.FileInputStream(rootProject.file("keystore.properties")))
-            }
-            keyAlias = props["keyAlias"] as String
-            keyPassword = props["password"] as String
-            storeFile = file(props["storeFile"] as String)
-            storePassword = props["password"] as String
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+            storeFile = file("__LEGACY_KEYSTORE_PATH__")
+            storePassword = "android"
         }
     }
     buildTypes {
@@ -102,6 +98,9 @@ android {
         }
     }
 }
-""")
+"""
+    with gradle.open("a") as f:
+        f.write(signing.replace("__LEGACY_KEYSTORE_PATH__", str(keystore).replace("\\\\", "/")))
+
 print("Staged Android background scheduler, migration and release signing.")
 
