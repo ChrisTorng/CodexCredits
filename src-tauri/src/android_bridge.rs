@@ -23,9 +23,7 @@ fn call(method:&str,args:&[&str])->Result<Option<String>,String>{
     for s in &strings{values.push(JValue::Object(s));}
     let sig=format!("(Landroid/content/Context;{})Ljava/lang/String;",
         "Ljava/lang/String;".repeat(args.len()));
-    // A Java exception raised during JNI lookup (especially NoSuchMethodError)
-    // must be cleared before detaching this thread. Otherwise an optional
-    // checkpoint can crash the entire app instead of reporting a harmless error.
+    // Clear pending Java exceptions before detaching the JNI thread.
     let value=match env.call_static_method(&class,method,&sig,&values)
         .and_then(|v|v.l()){
         Ok(value)=>value,
@@ -38,16 +36,6 @@ fn call(method:&str,args:&[&str])->Result<Option<String>,String>{
     let jstring=JString::from(value);
     let output=env.get_string(&jstring).map_err(|e|e.to_string())?;
     Ok(Some(output.to_string_lossy().into_owned()))
-}
-/// Startup breadcrumbs are best-effort. No raw settings or credentials cross
-/// this channel; the native launcher can show the final stage after a crash.
-pub fn checkpoint(phase:&str){
-    let _=call("startupCheckpoint",&[phase]);
-}
-/// Return the read-only, one-launch migration bypass chosen in the native
-/// diagnostic screen. It does NOT set the migration-done SQLite marker.
-pub fn consume_skip_legacy()->bool{
-    call("consumeSkipLegacy",&[]).ok().flatten().as_deref()==Some("true")
 }
 pub fn export_legacy()->Result<serde_json::Value,String>{
     serde_json::from_str(&call("exportLegacy",&[])?.ok_or("無舊版資料")?)
