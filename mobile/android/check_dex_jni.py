@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 """Validate that the optimized APK actually retains every Rust-called Java method.
 
-A Release APK once compiled and signed successfully but crashed immediately:
-  java.lang.NoSuchMethodError: LegacyBridge.startupCheckpoint(...)
-Debug APKs were unaffected. This checks the *APK Dex*, not the source tree.
+Release builds can shrink methods referenced only from Rust via JNI.
+Check the compiled APK Dex to ensure production bridge methods survive.
 """
 import argparse
 import re
@@ -17,7 +16,7 @@ args = parser.parse_args()
 
 source = Path("src-tauri/src/android_bridge.rs").read_text(encoding="utf-8")
 required = sorted(set(re.findall(r'call\("([A-Za-z0-9_]+)"', source)))
-if "startupCheckpoint" not in required or "readCredential" not in required:
+if not {"readCredential", "exportLegacy", "syncSettings"}.issubset(required):
     sys.exit(f"Failed to discover required JNI bridge methods from Rust: {required}")
 
 with zipfile.ZipFile(args.apk) as archive:
