@@ -393,23 +393,8 @@ fn android_open_system_settings(kind:String)->Result<(),String>{
  #[cfg(not(target_os="android"))]
  {let _=kind;Err("僅 Android 支援".into())}
 }
-#[tauri::command]
-fn android_startup_checkpoint(stage:u8)->Result<(),String>{
- #[cfg(target_os="android")]
- match stage {
-  60=>android_bridge::checkpoint("60 webview-initialize-started"),
-  61=>android_bridge::checkpoint("61 local-state-loaded"),
-  62=>android_bridge::checkpoint("62 local-state-load-error"),
-  _=>return Err("無效診斷節點".into())
- }
- #[cfg(not(target_os="android"))]
- let _=stage;
- Ok(())
-}
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run(){
- #[cfg(target_os="android")]
- android_bridge::checkpoint("45 rust-run-entry");
  let mut builder=tauri::Builder::default().plugin(tauri_plugin_notification::init());
  #[cfg(desktop)]
  {
@@ -419,26 +404,19 @@ pub fn run(){
  }
  builder
  .setup(|app|{
-  #[cfg(target_os="android")]
-  android_bridge::checkpoint("50 rust-setup-entered");
   let handle=app.handle().clone();
   let path=handle.path().app_data_dir()?;std::fs::create_dir_all(&path)?;
-  #[cfg(target_os="android")]
-  android_bridge::checkpoint("51 rust-data-directory-ready");
   let db=storage::open(&path.join("codexcredits.sqlite3")).map_err(std::io::Error::other)?;
   #[cfg(target_os="android")]
-  android_bridge::checkpoint("52 sqlite-opened");
+  if storage::get_meta(&db,"android_quota_cutover_ms_v2").is_none(){
+   // Discard ambiguous old samples; keep sign-in, settings and events.
+   db.execute("DELETE FROM samples",[]).map_err(std::io::Error::other)?;
+   let cutoff=chrono::Utc::now().timestamp_millis().to_string();
+   storage::set_meta(&db,"android_quota_cutover_ms_v2",Some(&cutoff)).map_err(std::io::Error::other)?;
+  }
   #[cfg(target_os="android")]
-  let skip_legacy=android_bridge::consume_skip_legacy();
-  #[cfg(target_os="android")]
-  android_bridge::checkpoint(if skip_legacy{"53 legacy-import-skipped-by-user"}else{"53 legacy-import-begin"});
-  #[cfg(target_os="android")]
-  let migration_error=if skip_legacy{None}else{legacy::import(&db).err()};
-  #[cfg(target_os="android")]
-  android_bridge::checkpoint(if skip_legacy{"54 legacy-import-skipped"}else if migration_error.is_some(){"54 legacy-import-error-returned"}else{"54 legacy-import-ok"});
+  let migration_error=legacy::import(&db).err();
   let settings=storage::get_settings(&db);
-  #[cfg(target_os="android")]
-  android_bridge::checkpoint("55 settings-loaded");
   let armed=storage::get_meta(&db,"banked_armed");
   #[cfg(target_os="android")]
   let armed=if android_bridge::banked_armed().unwrap_or(false){Some("android-native".into())}else{armed};
@@ -454,8 +432,6 @@ pub fn run(){
    login_busy:tokio::sync::Mutex::new(())
   });
   app.manage(state.clone());
-  #[cfg(target_os="android")]
-  android_bridge::checkpoint("56 app-state-managed");
   #[cfg(desktop)]
   {
   let show=MenuItem::with_id(app,"show","顯示 Codex Tools",true,None::<&str>)?;
@@ -524,8 +500,6 @@ pub fn run(){
     let _=handle.emit("credits:updated",());
    }
   });
-  #[cfg(target_os="android")]
-  android_bridge::checkpoint("57 rust-setup-complete");
   Ok(())
  }).on_window_event(|window,event|{
   #[cfg(desktop)]
@@ -536,7 +510,7 @@ pub fn run(){
  .invoke_handler(tauri::generate_handler![
   get_snapshot,save_settings,login_with_chatgpt,sign_out,refresh,manual_trigger,
   banked_reset,toggle_banked_armed,ntfy_test,native_notify_test,get_local_state,get_history,get_events,
-  android_platform_status,android_open_system_settings,android_startup_checkpoint
+  android_platform_status,android_open_system_settings
  ])
  .run(tauri::generate_context!()).expect("CodexCredits could not start");
 }
