@@ -104,6 +104,8 @@ if(androidRuntime){
 
 let snapshot:Snapshot|null=null;
 let samples:Sample[]=[];
+const chronological=(rows:Sample[]):Sample[]=>rows.filter(s=>Number.isFinite(Date.parse(s.at)))
+ .sort((a,b)=>Date.parse(a.at)-Date.parse(b.at));
 let events:Event[]=[];
 let page="status";
 let theme="system";
@@ -341,7 +343,7 @@ async function load(){
 async function loadHistory(){
  try{
   const [history,logs]=await Promise.all([call<Sample[]>("get_history"),call<Event[]>("get_events")]);
-  samples=history;events=logs;renderEvents();draw();
+  samples=chronological(history);events=logs;renderEvents();draw();
  }catch(e){toast(String(e));}
 }
 async function refresh(){
@@ -550,16 +552,16 @@ obs.observe($("app"));
 void listen("credits:updated",async()=>{await Promise.allSettled([load(),loadHistory()]);});
 type LocalState={snapshot:Snapshot;history:Sample[];events:Event[]};
 async function initialize(){
- if(androidRuntime)void invoke("android_startup_checkpoint",{stage:60}).catch(()=>{});
+
  // Load persisted samples and events first, independent of OAuth, quota API,
  // or slow startup network operations. Never require "更新配額" to restore history.
  try{
   const cached=await call<LocalState>("get_local_state");
-  snapshot=cached.snapshot;samples=cached.history;events=cached.events;
+  snapshot=cached.snapshot;samples=chronological(cached.history);events=cached.events;
   render();
-  if(androidRuntime)void invoke("android_startup_checkpoint",{stage:61}).catch(()=>{});
+
  }catch(e){
-  if(androidRuntime)void invoke("android_startup_checkpoint",{stage:62}).catch(()=>{});
+
   toast("讀取本機資料失敗："+String(e));
   await Promise.allSettled([loadHistory(),load()]);
  }
