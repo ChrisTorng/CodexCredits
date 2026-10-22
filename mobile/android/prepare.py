@@ -25,27 +25,33 @@ for name in names:
 (out/"LegacyBridge.java").write_bytes(Path("mobile/android/LegacyBridge.java").read_bytes())
 # Required: Rust resolves LegacyBridge methods by exact JNI names at runtime.
 (project/"jni-keep.pro").write_bytes(Path("mobile/android/jni-keep.pro").read_bytes())
-# A pure-Java launcher runs before Tauri and survives failures in Rust startup.
-for name in ("StartupTrace", "StartupDiagnosticActivity"):
-    (out/(name+".java")).write_bytes((Path("mobile/android")/(name+".java")).read_bytes())
-
-
 activity=next(project.rglob("MainActivity.kt"),None)
 if activity is None:raise SystemExit("Missing generated MainActivity.kt")
 original=activity.read_text()
 prefix=original.split("class MainActivity",1)[0]
-if "import android.os.Bundle" not in prefix:
-    prefix+="\nimport android.os.Bundle\n"
+for line in ("import android.os.Bundle", "import android.view.View",
+             "import androidx.core.view.ViewCompat", "import androidx.core.view.WindowCompat",
+             "import androidx.core.view.WindowInsetsCompat"):
+    if line not in prefix:
+        prefix+="\n"+line+"\n"
 activity.write_text(prefix+"""
 class MainActivity : TauriActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
-        StartupTrace.mark(this, "41 tauri-activity-before-super")
         super.onCreate(savedInstanceState)
-        StartupTrace.mark(this, "42 tauri-activity-after-super")
+        // Apply safe insets to the native WebView container on every API level.
+        // This prevents content from overlapping both system bars and cutouts.
+        WindowCompat.setDecorFitsSystemWindows(window, false)
+        val root = findViewById<View>(android.R.id.content)
+        ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
+            val bars = insets.getInsets(
+                WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
+            val keyboard = insets.getInsets(WindowInsetsCompat.Type.ime())
+            view.setPadding(bars.left, bars.top, bars.right, maxOf(bars.bottom, keyboard.bottom))
+            insets
+        }
+        ViewCompat.requestApplyInsets(root)
         AndroidNotifications.ensureChannel(this)
-        StartupTrace.mark(this, "43 notification-channel-ready")
         Scheduler.scheduleQuotaSampling(this)
-        StartupTrace.mark(this, "44 native-sampling-ready")
     }
 }
 """)
@@ -62,30 +68,6 @@ app=root.find("application")
 if app is None:raise SystemExit("Missing application")
 app.set(A("allowBackup"),"false")
 app.set(A("usesCleartextTraffic"),"true")
-# Replace only the icon-launch intent; leave any deep-link intent filters intact.
-main_activities = [e for e in app.findall("activity")
-    if e.get(A("name"), "").endswith(".MainActivity")]
-if len(main_activities) != 1:
-    raise SystemExit("Expected exactly one generated MainActivity")
-main_activity = main_activities[0]
-launcher_count = 0
-for intent in list(main_activity.findall("intent-filter")):
-    actions = {e.get(A("name")) for e in intent.findall("action")}
-    cats = {e.get(A("name")) for e in intent.findall("category")}
-    if "android.intent.action.MAIN" in actions and "android.intent.category.LAUNCHER" in cats:
-        main_activity.remove(intent)
-        launcher_count += 1
-if launcher_count != 1:
-    raise SystemExit(f"Expected one launcher intent on MainActivity, found {launcher_count}")
-diagnostic = ET.SubElement(app, "activity", {
-    A("name"): ".StartupDiagnosticActivity",
-    A("exported"): "true",
-    A("theme"): "@android:style/Theme.Material.Light.NoActionBar",
-    A("label"): "Codex Tools 啟動診斷",
-})
-launcher = ET.SubElement(diagnostic, "intent-filter")
-ET.SubElement(launcher, "action", {A("name"): "android.intent.action.MAIN"})
-ET.SubElement(launcher, "category", {A("name"): "android.intent.category.LAUNCHER"})
 for name in ("AlarmReceiver","BootReceiver"):
     e=ET.SubElement(app,"receiver",{A("name"):"."+name,
         A("exported"):"true" if name=="BootReceiver" else "false"})
@@ -108,6 +90,7 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("com.squareup.okhttp3:okhttp-dnsoverhttps:4.12.0")
     implementation("androidx.annotation:annotation:1.9.1")
+    implementation("androidx.core:core-ktx:1.15.0")
 }
 android {
     buildTypes {
@@ -145,5 +128,5 @@ android {
     with gradle.open("a") as f:
         f.write(signing.replace("__LEGACY_KEYSTORE_PATH__", str(keystore).replace("\\\\", "/")))
 
-print("Staged Android background scheduler, migration and release signing.")
+print("Staged Android background scheduler, safe-area insets and release signing.")
 
