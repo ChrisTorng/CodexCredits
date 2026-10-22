@@ -3,5 +3,3 @@
 -keep class com.christorng.androidcodextools.LegacyBridge {
     public static java.lang.String *(...);
 }
--keep class com.christorng.androidcodextools.StartupTrace { *; }
--keep class com.christorng.androidcodextools.StartupDiagnosticActivity { *; }
