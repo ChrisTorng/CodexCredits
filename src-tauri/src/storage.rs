@@ -41,7 +41,7 @@ pub fn add_sample(db:&Connection,five:Option<f64>,weekly:Option<f64>,f_reset:Opt
  let old:Option<(i64,String)>=db.query_row("SELECT id,at FROM samples ORDER BY id DESC LIMIT 1",[],|r|Ok((r.get(0)?,r.get(1)?))).ok();
  let now=Utc::now();
  if let Some((id,at))=old{
-  if chrono::DateTime::parse_from_rfc3339(&at).is_ok_and(|t|now.signed_duration_since(t).num_seconds().abs()<30){
+  if chrono::DateTime::parse_from_rfc3339(&at).is_ok_and(|t|(0..30).contains(&now.signed_duration_since(t).num_seconds())){
    db.execute("UPDATE samples SET at=?1,five_hour=?2,weekly=?3,five_reset=?4,weekly_reset=?5 WHERE id=?6",
     params![now.to_rfc3339(),five,weekly,f_reset,w_reset,id]).map_err(|e|e.to_string())?;return Ok(());
   }
@@ -64,7 +64,7 @@ pub fn cleanup(db:&Connection,days:i64)->Result<(),String>{
  db.execute("DELETE FROM events WHERE at < ?1",params![cutoff]).map_err(|e|e.to_string())?;Ok(())
 }
 pub fn history(db:&Connection)->Result<Vec<serde_json::Value>,String>{
- let mut stmt=db.prepare("SELECT at,five_hour,weekly,five_reset,weekly_reset FROM samples ORDER BY id DESC LIMIT 1440").map_err(|e|e.to_string())?;
+ let mut stmt=db.prepare("SELECT at,five_hour,weekly,five_reset,weekly_reset FROM samples ORDER BY julianday(at) DESC,id DESC LIMIT 1440").map_err(|e|e.to_string())?;
  let rows=stmt.query_map([],|r|Ok(serde_json::json!({
   "at":r.get::<_,String>(0)?,"five_hour":r.get::<_,Option<f64>>(1)?,"weekly":r.get::<_,Option<f64>>(2)?,
   "five_reset":r.get::<_,Option<String>>(3)?,"weekly_reset":r.get::<_,Option<String>>(4)?
@@ -96,6 +96,15 @@ pub fn events(db:&Connection)->Result<Vec<serde_json::Value>,String>{
    assert_eq!(logs[0]["kind"],"restart");
   }
   let _=std::fs::remove_file(path);
+ }
+ #[test]fn history_is_chronological_not_insertion_order(){
+  let db=Connection::open_in_memory().unwrap();
+  db.execute_batch("CREATE TABLE samples(id INTEGER PRIMARY KEY,at TEXT,five_hour REAL,weekly REAL,five_reset TEXT,weekly_reset TEXT);").unwrap();
+  db.execute("INSERT INTO samples(at,five_hour) VALUES(?1,?2)",params!["2026-10-22T16:00:00+00:00",30.]).unwrap();
+  db.execute("INSERT INTO samples(at,five_hour) VALUES(?1,?2)",params!["2026-10-22T15:00:00+00:00",20.]).unwrap();
+  let rows=history(&db).unwrap();
+  assert_eq!(rows[0]["five_hour"],20.);
+  assert_eq!(rows[1]["five_hour"],30.);
  }
  #[test]fn roundtrip(){
   let db=Connection::open_in_memory().unwrap();
