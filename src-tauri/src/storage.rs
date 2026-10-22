@@ -41,7 +41,7 @@ pub fn add_sample(db:&Connection,five:Option<f64>,weekly:Option<f64>,f_reset:Opt
  let old:Option<(i64,String)>=db.query_row("SELECT id,at FROM samples ORDER BY id DESC LIMIT 1",[],|r|Ok((r.get(0)?,r.get(1)?))).ok();
  let now=Utc::now();
  if let Some((id,at))=old{
-  if chrono::DateTime::parse_from_rfc3339(&at).is_ok_and(|t|(0..30).contains(&now.signed_duration_since(t).num_seconds())){
+  if chrono::DateTime::parse_from_rfc3339(&at).is_ok_and(|t|(0..30_000).contains(&now.signed_duration_since(t).num_milliseconds())){
    db.execute("UPDATE samples SET at=?1,five_hour=?2,weekly=?3,five_reset=?4,weekly_reset=?5 WHERE id=?6",
     params![now.to_rfc3339(),five,weekly,f_reset,w_reset,id]).map_err(|e|e.to_string())?;return Ok(());
   }
