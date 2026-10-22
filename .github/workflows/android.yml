@@ -1,4 +1,4 @@
-name: Android parity APK
+name: Android Release compilation
 on:
   push:
     branches: [main, android-parity]
@@ -55,16 +55,14 @@ jobs:
           npm run tauri -- android init --ci --skip-targets-install --config src-tauri/tauri.android.conf.json
       - name: Integrate original Android native engine
         run: python3 mobile/android/prepare.py --legacy legacy
-      - name: Build ARM64 validation APK
+      - name: Compile optimized ARM64 Release APK (signature checked by signing pipeline)
         run: |
           export NDK_HOME="$ANDROID_HOME/ndk/27.2.12479018"
-          npm run tauri -- android build --debug --apk --target aarch64 --config src-tauri/tauri.android.conf.json
-      - name: Inspect APK size
+          npm run tauri -- android build --apk --target aarch64 --config src-tauri/tauri.android.conf.json
+      - name: Verify compiled Release APK and JNI bridge
         run: |
           find src-tauri/gen/android/app/build/outputs/apk -type f -name '*.apk' -printf '%p %s bytes\n'
-          test "$(find src-tauri/gen/android/app/build/outputs/apk -name '*.apk' | wc -l)" -ge 1
-      - uses: actions/upload-artifact@v4
-        with:
-          name: CodexCredits-Android-Validation
-          path: src-tauri/gen/android/app/build/outputs/apk/**/*.apk
-          if-no-files-found: error
+          APK=$(find src-tauri/gen/android/app/build/outputs/apk -type f -name '*.apk' | head -n 1)
+          test -n "$APK"
+          python3 mobile/android/check_dex_jni.py "$APK"
+          echo "Release compilation passed. Installable original-key signed APK is published by CodexCredits v2.0.5 signing workflow in ChrisTorng/android-codex-tools."
