@@ -8,6 +8,9 @@ use crate::{schedule::{Settings,Mode,Rule,Override},storage};
 fn as_date(ms:i64)->Option<String>{
     DateTime::<Utc>::from_timestamp_millis(ms).map(|d|d.to_rfc3339())
 }
+fn used_percent(v:&Value,key:&str)->Option<f64>{
+    v.get(key).and_then(Value::as_f64).filter(|n|n.is_finite()).map(|n|n.clamp(0.,100.))
+}
 fn old_json(p:&Value,key:&str,default:&str)->Result<Value,String>{
     let raw=p.get(key).and_then(Value::as_str).unwrap_or(default);
     serde_json::from_str(raw).map_err(|e|format!("舊版 {key} 損毀: {e}"))
@@ -91,6 +94,7 @@ pub fn import(db:&Connection)->Result<bool,String>{
     let p=src.get("prefs").ok_or("舊版設定缺少 prefs")?;
     let has_old=p.as_object().is_some_and(|o|!o.is_empty());
     let old_samples=old_json(p,"usage_samples_v1","[]")?;
+    let cutover=storage::get_meta(db,"android_quota_cutover_ms_v2").and_then(|v|v.parse::<i64>().ok()).unwrap_or(i64::MIN);
     let old_events=old_json(p,"usage_history_events_v1","[]")?;
     let converted=settings(p)?;
     import_tokens(&src["tokens"])?;
@@ -99,9 +103,11 @@ pub fn import(db:&Connection)->Result<bool,String>{
         if has_old{storage::save_settings(db,&converted)?;}
         if let Some(rows)=old_samples.as_array(){
             for v in rows{
-                let Some(at)=v.get("at").and_then(Value::as_i64).and_then(as_date)else{continue};
-                let five=v.get("p").and_then(Value::as_f64).map(|x|(100.-x).clamp(0.,100.));
-                let weekly=v.get("w").and_then(Value::as_f64).map(|x|(100.-x).clamp(0.,100.));
+                let Some(at_ms)=v.get("at").and_then(Value::as_i64)else{continue};
+                if at_ms<cutover{continue;}
+                let Some(at)=as_date(at_ms)else{continue};
+                let five=used_percent(v,"p");
+                let weekly=used_percent(v,"w");
                 let reset=|key:&str|v.get(key).and_then(Value::as_i64).and_then(as_date);
                 db.execute("INSERT INTO samples(at,five_hour,weekly,five_reset,weekly_reset) VALUES(?1,?2,?3,?4,?5)",
                     params![at,five,weekly,reset("pr"),reset("wr")]).map_err(|e|e.to_string())?;
@@ -134,14 +140,17 @@ pub fn sync_native(db:&Connection)->Result<(),String>{
     let src=crate::android_bridge::export_legacy()?;
     let p=src.get("prefs").ok_or("舊版資料缺少 prefs")?;
     let old_samples=old_json(p,"usage_samples_v1","[]")?;
+    let cutover=storage::get_meta(db,"android_quota_cutover_ms_v2").and_then(|v|v.parse::<i64>().ok()).unwrap_or(i64::MIN);
     let old_events=old_json(p,"usage_history_events_v1","[]")?;
     db.execute_batch("BEGIN IMMEDIATE").map_err(|e|e.to_string())?;
     let done=(||->Result<(),String>{
         if let Some(rows)=old_samples.as_array(){
             for v in rows {
-                let Some(at)=v.get("at").and_then(Value::as_i64).and_then(as_date) else{continue};
-                let five=v.get("p").and_then(Value::as_f64).map(|x|(100.-x).clamp(0.,100.));
-                let weekly=v.get("w").and_then(Value::as_f64).map(|x|(100.-x).clamp(0.,100.));
+                let Some(at_ms)=v.get("at").and_then(Value::as_i64)else{continue};
+                if at_ms<cutover{continue;}
+                let Some(at)=as_date(at_ms)else{continue};
+                let five=used_percent(v,"p");
+                let weekly=used_percent(v,"w");
                 let reset=|key:&str|v.get(key).and_then(Value::as_i64).and_then(as_date);
                 db.execute("INSERT INTO samples(at,five_hour,weekly,five_reset,weekly_reset)
                     SELECT ?1,?2,?3,?4,?5
@@ -171,6 +180,12 @@ pub fn sync_native(db:&Connection)->Result<(),String>{
 }
 #[cfg(test)]mod tests{
     use super::*;
+    #[test]fn legacy_samples_are_used_percent(){
+        let sample=json!({"p":27.,"w":11.});
+        assert_eq!(used_percent(&sample,"p"),Some(27.));
+        assert_eq!(used_percent(&sample,"w"),Some(11.));
+        assert_eq!(100.-used_percent(&sample,"p").unwrap(),73.);
+    }
     #[test]fn schedule_and_remaining_conversion(){
         let p=json!({"scheduler_mode":"custom","sample_interval_minutes":15,
             "schedule_weekly_v2":r#"[{"id":"abc","hour":6,"minute":0,"autoCount":3,"days":"1111111"}]"#,
