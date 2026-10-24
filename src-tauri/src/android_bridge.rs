@@ -41,6 +41,16 @@ pub fn export_legacy()->Result<serde_json::Value,String>{
     serde_json::from_str(&call("exportLegacy",&[])?.ok_or("無舊版資料")?)
         .map_err(|e|format!("舊版設定格式有誤: {e}"))
 }
+/// Exchange the authorization code using the same Android OkHttp client
+/// and DNS fallback that services background scheduling.
+pub fn exchange_auth_code(payload:&str)->Result<String,String>{
+    call("exchangeAuthCode",&[payload])?.ok_or("Android OAuth exchange returned no response".into())
+}
+/// Read/refresh the Android native credential authority; no Rust token
+/// refresh request may race the platform scheduler.
+pub fn valid_native_session()->Result<String,String>{
+    call("validNativeSession",&[])?.ok_or("Android OAuth credentials unavailable".into())
+}
 pub fn credential_get(key:&str)->Result<Option<String>,String>{call("readCredential",&[key])}
 pub fn credential_put(key:&str,value:&str)->Result<(),String>{
     call("writeCredential",&[key,value]).map(|_|())
