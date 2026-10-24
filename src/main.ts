@@ -179,7 +179,9 @@ function renderNotificationStatus(){
  const optedIn=snapshot.settings.native_notify_enabled;
  const permission=notificationPermission===true?"系統權限：允許":
                   notificationPermission===false?"系統權限：未允許":"系統權限：尚未確認";
- const portableNote="Windows 原生通知須使用安裝版（Setup EXE）；免安裝版不保證能顯示通知。";
+ const portableNote=androidRuntime
+    ?"Android 通知依系統通知權限、電池最佳化與通知管道設定。"
+    :"Windows 原生通知須使用安裝版（Setup EXE）；免安裝版不保證能顯示通知。";
  $("native-status").textContent=(optedIn?"程式通知已開啟。":"程式通知已關閉。")+
    " "+permission+"。 "+portableNote+
    (notificationPermissionError?" 查詢錯誤："+notificationPermissionError:"");
@@ -274,7 +276,10 @@ function draw(){
 function render(){
  if(!snapshot)return;
  const s=snapshot,u=s.usage,mode=s.settings.mode;
- $("account").textContent=s.signed_in?"ChatGPT 已登入 · "+(u?.plan??"—")+(u?.checked_at?" · 更新 "+fdate(u.checked_at):""):"ChatGPT 尚未登入";
+ const authInvalid=!!s.error&&/401|重新登入|登入逾期|憑證已失效/i.test(s.error);
+ $("account").textContent=s.signed_in
+  ?(authInvalid?"ChatGPT 憑證已失效 · 請重新登入":"ChatGPT 已登入 · "+(u?.plan??"—")+(u?.checked_at?" · 更新 "+fdate(u.checked_at):""))
+  :"ChatGPT 尚未登入";
  $("primary-percent").textContent=percent(u?.five_hour);
  $("weekly-percent").textContent=percent(u?.weekly);
  $("status-next").textContent=mode==="off"?"已關閉 · 尚未排程":
@@ -304,7 +309,7 @@ function render(){
   const over=s.settings.overrides[date];
   $(output).textContent=over?.enabled?(over.rules.length?over.rules.filter(r=>r.enabled).map(r=>ruleLabel(r,false)).join("\n"):"覆寫：當天不觸發"):"使用每週預設";
  }
- $("settings-account").textContent=s.signed_in?"已登入":"尚未登入";
+ $("settings-account").textContent=s.signed_in?(authInvalid?"登入已失效，請重新登入":"已登入"):"尚未登入";
  ($("sample") as HTMLSelectElement).value=String(s.settings.sampling_minutes);
  ($("theme") as HTMLSelectElement).value=s.settings.theme;
  ($("native-toggle") as HTMLInputElement).checked=s.settings.native_notify_enabled;
