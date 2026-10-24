@@ -40,7 +40,7 @@ app.innerHTML=[
 '</main>',
 '<main class="page history-page" id="page-history">',
 '<div class="history-charts"><div class="history-chart" id="yesterday-chart"></div><div class="history-chart" id="today-chart"></div></div>',
-'<p class="chart-footnote">Global Reset：codex-reset.com · 實線＝實際剩餘 · 虛線＝理想/排程</p>',
+
 '<section class="card history-events"><h2>事件與採樣</h2><div id="event-list">尚無配額採樣</div></section>',
 '</main>',
 '<main class="page" id="page-settings">',
@@ -64,6 +64,7 @@ app.innerHTML=[
 '<div class="dialog-footer"><button id="rule-cancel">取消</button><button class="primary" id="rule-save">儲存</button></div></dialog>'
 ].join("");
 const androidRuntime=/Android/i.test(navigator.userAgent);
+let checkAlarmPolicy:()=>Promise<void>=async()=>{};
 if(androidRuntime){
   // Advanced system settings appear only when a schedule is enabled and
   // the essential exact-alarm permission is missing.
@@ -72,7 +73,7 @@ if(androidRuntime){
   policy.hidden=true;
   policy.innerHTML='<h2>排程權限需要設定</h2><p>精準鬧鐘尚未允許，排程可能無法準時執行。</p><div class="button-row"><button id="android-exact">開啟設定</button></div>';
   document.querySelector("#page-settings")?.append(policy);
-  const checkAlarm=async()=>{
+  checkAlarmPolicy=async()=>{
     try{
       const v=await invoke<{exact_alarm:boolean}>("android_platform_status");
       policy.hidden=v.exact_alarm || snapshot?.settings.mode==="off";
@@ -85,8 +86,7 @@ if(androidRuntime){
     try{await invoke("android_open_system_settings",{kind:"exact"});}
     catch(e){toast(String(e));}
   });
-  document.addEventListener("visibilitychange",()=>{if(!document.hidden)void checkAlarm();});
-  // Defined after initialization; no check runs until snapshot is available.
+  document.addEventListener("visibilitychange",()=>{if(!document.hidden)void checkAlarmPolicy();});
 }
 
 let snapshot:Snapshot|null=null;
@@ -151,7 +151,7 @@ const call=async<T>(name:string,args?:Record<string,unknown>):Promise<T>=>invoke
 function showPage(name:string){
  if(name!==page)closeToast();
  page=name;
- if(name==="settings")void refreshNotificationPermission();
+ if(name==="settings"){void refreshNotificationPermission();void checkAlarmPolicy();}
  for(const btn of Array.from(document.querySelectorAll<HTMLButtonElement>(".tab"))){
   const selected=btn.dataset.tab===name;
   btn.classList.toggle("active",selected);btn.setAttribute("aria-selected",String(selected));
@@ -214,7 +214,12 @@ function paintQuota(id:string,used:number|null|undefined,reset:string|null|undef
    {name:"實際剩餘",type:"line",data:valid?actual:[],showSymbol:false,lineStyle:{width:2.4,color},itemStyle:{color},areaStyle:{color,opacity:.18},
       markLine:mark?{symbol:["none","none"],silent:true,label:{show:false},lineStyle:{color:p.text,width:1},data:[mark]}:undefined}
   ],
-  graphic:!valid?[{type:"text",left:10,top:"45%",style:{text:weekly?"未啟動":"5h 尚未啟動 · 等待觸發",fill:p.text,fontSize:11}}]:[]
+  graphic:!valid?[{type:"text",left:10,top:"45%",style:{text:
+     !snapshot?.signed_in?"請先登入":
+     !snapshot?.usage?.checked_at?"正在取得最新配額…":
+     (Date.now()-Date.parse(snapshot.usage.checked_at)>15*60000)?"等待更新配額…":
+     weekly?"未啟動":"尚未啟動 · 等待觸發",
+     fill:p.text,fontSize:11}}]:[]
  },true);
 }
 function paintHistory(id:string,offset:number){
@@ -236,7 +241,7 @@ function paintHistory(id:string,offset:number){
  const u=snapshot?.usage;
  const globalTime=snapshot?.global?.last_reset_at?new Date(snapshot.global.last_reset_at).getTime():null;
  const globalMark=globalTime!=null&&globalTime>=start&&globalTime<end?
-  {symbol:["none","none"],silent:true,label:{show:true,formatter:"Global Reset",fontSize:9},
+  {symbol:["none","none"],silent:true,label:{show:false},
    lineStyle:{type:"dashed",color:"#999",width:1},data:[{xAxis:globalTime}]}:undefined;
  const palette=[["5 小時","#2f80ed"],["週配額","#e89134"]] as const;
  chart.setOption({
@@ -278,8 +283,13 @@ function render(){
  $("status-next").textContent=mode==="off"?"已關閉 · 尚未排程":
    (mode==="auto"?"Reset 後自動 · ":"錨點＋接續 · ")+(s.next?fdate(new Date(s.next.at*1000).toISOString())+" · "+s.next.reason:"尚未排程");
  const confirmed=!!u?.primary_confirmed&&!!u.five_reset&&new Date(u.five_reset).getTime()>Date.now();
- $("trigger-preview").textContent=confirmed?"5h 進行中 · 可再開始：約 "+fdate(u?.five_reset):"現在觸發 · 預估重置 "+fdate(new Date(Date.now()+5*3600000).toISOString());
- ($("trigger") as HTMLButtonElement).disabled=!s.signed_in||confirmed||!u?.allowed||u?.weekly===100;
+ const checkedAt=u?.checked_at?Date.parse(u.checked_at):0;
+ const stale=!Number.isFinite(checkedAt)||checkedAt<=0||Date.now()-checkedAt>15*60000;
+ $("trigger-preview").textContent=!s.signed_in?"請先登入":
+   stale?"正在取得最新配額…":
+   confirmed?"5h 進行中 · 可再開始："+fdate(u?.five_reset):
+   "可立即觸發 · 預估重置 "+fdate(new Date(Date.now()+5*3600000).toISOString());
+ ($("trigger") as HTMLButtonElement).disabled=!s.signed_in||stale||confirmed||!u?.allowed||u?.weekly===100;
  const credits=s.credits;const available=credits?.count??0;
  $("reset-title").textContent="Banked Reset ×"+available+(s.armed?" · 待命":"");
  $("reset-action").textContent="Banked Reset ×"+available+(s.armed?" · 待命":"");
