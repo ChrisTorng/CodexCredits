@@ -1,5 +1,11 @@
 use serde::{Deserialize,Serialize};
 use serde_json::Value;
+#[cfg(target_os="android")]
+fn native_json<T:serde::de::DeserializeOwned>(raw:&str,service:&str)->Result<T,String>{
+ let value:Value=serde_json::from_str(raw).map_err(|e|format!("{service} 回應格式錯誤: {e}"))?;
+ if let Some(error)=value["error"].as_str(){return Err(format!("{service}: {error}"));}
+ serde_json::from_value(value).map_err(|e|format!("{service} 資料不完整: {e}"))
+}
 const USAGE_URL:&str="https://chatgpt.com/backend-api/wham/usage";
 const RESET_URL:&str="https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
 const CONSUME_URL:&str="https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume";
@@ -29,6 +35,16 @@ fn authorized(client:&reqwest::Client,url:&str,token:&str,account:Option<&str>)-
  r
 }
 pub async fn fetch_usage(token:&str,account_id:Option<&str>)->Result<Usage,String>{
+ #[cfg(target_os="android")]
+ {
+  let _=(token,account_id);
+  let raw=tokio::task::spawn_blocking(crate::android_bridge::native_usage)
+   .await.map_err(|e|format!("Android 配額工作失敗: {e}"))??;
+  return native_json(&raw,"Android 配額查詢");
+ }
+ #[cfg(not(target_os="android"))]
+ {
+
  let client=http()?;
  let response=authorized(&client,USAGE_URL,token,account_id).send().await.map_err(|e|e.to_string())?;
  if !response.status().is_success(){return Err(format!("配額查詢 HTTP {}",response.status()));}
@@ -42,8 +58,19 @@ pub async fn fetch_usage(token:&str,account_id:Option<&str>)->Result<Usage,Strin
   limit_reached:limits["limit_reached"].as_bool().unwrap_or(false),
   primary_confirmed:false,
   checked_at:chrono::Utc::now().to_rfc3339()})
+ }
 }
 pub async fn fetch_credits(token:&str,account_id:Option<&str>)->Result<Credits,String>{
+ #[cfg(target_os="android")]
+ {
+  let _=(token,account_id);
+  let raw=tokio::task::spawn_blocking(crate::android_bridge::native_credits)
+   .await.map_err(|e|format!("Android Banked Reset 工作失敗: {e}"))??;
+  return native_json(&raw,"Android Banked Reset 查詢");
+ }
+ #[cfg(not(target_os="android"))]
+ {
+
  let client=http()?;
  let response=authorized(&client,RESET_URL,token,account_id).send().await.map_err(|e|e.to_string())?;
  if !response.status().is_success(){return Err(format!("Banked Reset HTTP {}",response.status()));}
@@ -56,6 +83,7 @@ pub async fn fetch_credits(token:&str,account_id:Option<&str>)->Result<Credits,S
     expires_at:v["expires_at"].as_str().unwrap_or("").into()
   })).collect();
  Ok(Credits{count:json["available_count"].as_i64().unwrap_or(available.len() as i64),available})
+ }
 }
 pub async fn consume_credit(token:&str,account_id:Option<&str>,credit_id:&str)->Result<i64,String>{
  let client=http()?;
