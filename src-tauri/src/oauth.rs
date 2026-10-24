@@ -108,6 +108,21 @@ fn http()->Result<reqwest::Client,String>{
     reqwest::Client::builder().timeout(Duration::from_secs(30)).build().map_err(|e|e.to_string())
 }
 fn expires_in(n:Option<i64>)->i64{chrono::Utc::now().timestamp()+n.unwrap_or(3600).clamp(60,86400)}
+#[cfg(target_os="android")]
+fn parse_native_session(raw:&str)->Result<Session,String>{
+    let value:serde_json::Value=serde_json::from_str(raw)
+        .map_err(|e|format!("Android 登入回應無效: {e}"))?;
+    if let Some(error)=value.get("error").and_then(|x|x.as_str()){
+        return Err(error.to_owned());
+    }
+    let session:Session=serde_json::from_value(value)
+        .map_err(|e|format!("Android Token 資料不完整: {e}"))?;
+    if session.access_token.is_empty() || session.account_id.is_empty(){
+        return Err("Android 登入資料缺少必要 Token 或 Account ID".into());
+    }
+    Ok(session)
+}
+
 pub async fn browser_login()->Result<Session,String>{
     let listener=TcpListener::bind("127.0.0.1:0").await.map_err(|e|format!("無法啟動本機登入回呼: {e}"))?;
     let port=listener.local_addr().map_err(|e|e.to_string())?.port();
@@ -119,17 +134,29 @@ pub async fn browser_login()->Result<Session,String>{
     #[cfg(not(target_os="android"))]
     webbrowser::open(url.as_str()).map_err(|e|format!("無法開啟瀏覽器: {e}"))?;
     let code=callback(listener,&state).await?;
-    let res=http()?.post(TOKEN_URL).form(&[
-        ("grant_type","authorization_code"),("client_id",CLIENT_ID),
-        ("code",code.as_str()),("redirect_uri",redirect.as_str()),("code_verifier",verifier.as_str()),
-    ]).send().await.map_err(|e|format!("登入連線失敗: {e}"))?;
-    if !res.status().is_success(){return Err(format!("OAuth Token API HTTP {}",res.status()));}
-    let value:Response=res.json().await.map_err(|e|format!("Token 內容解析失敗: {e}"))?;
-    let id=value.id_token.ok_or("缺少 ID Token")?;
-    let account_id=account_from_id_token(&id)?;
-    if value.access_token.is_empty(){return Err("缺少 Access Token".into());}
-    Ok(Session{access_token:value.access_token,refresh_token:value.refresh_token,
-        account_id,expires_at:expires_in(value.expires_in)})
+    #[cfg(target_os="android")]
+    {
+        // The browser callback succeeded; exchange via Android's native
+        // CodexClient (OkHttp + network/DNS fallbacks), not Rust reqwest.
+        let args=serde_json::json!({"code":code,"verifier":verifier,"redirect":redirect}).to_string();
+        let raw=tokio::task::spawn_blocking(move||crate::android_bridge::exchange_auth_code(&args))
+            .await.map_err(|e|format!("Android 登入工作失敗: {e}"))??;
+        return parse_native_session(&raw);
+    }
+    #[cfg(not(target_os="android"))]
+    {
+        let res=http()?.post(TOKEN_URL).form(&[
+            ("grant_type","authorization_code"),("client_id",CLIENT_ID),
+            ("code",code.as_str()),("redirect_uri",redirect.as_str()),("code_verifier",verifier.as_str()),
+        ]).send().await.map_err(|e|format!("登入連線失敗: {e}"))?;
+        if !res.status().is_success(){return Err(format!("OAuth Token API HTTP {}",res.status()));}
+        let value:Response=res.json().await.map_err(|e|format!("Token 內容解析失敗: {e}"))?;
+        let id=value.id_token.ok_or("缺少 ID Token")?;
+        let account_id=account_from_id_token(&id)?;
+        if value.access_token.is_empty(){return Err("缺少 Access Token".into());}
+        Ok(Session{access_token:value.access_token,refresh_token:value.refresh_token,
+            account_id,expires_at:expires_in(value.expires_in)})
+    }
 }
 pub fn save_session(s:&Session)->Result<(),String>{
     crate::credentials::save(&serde_json::to_string(s).map_err(|e|e.to_string())?)?;
@@ -138,6 +165,31 @@ pub fn save_session(s:&Session)->Result<(),String>{
     Ok(())
 }
 pub async fn valid_access()->Result<Access,String>{
+    #[cfg(target_os="android")]
+    {
+        // Both the background scheduler and the UI read one canonical
+        // SecureStore. Refreshing from a second Rust store can invalidate
+        // a rotated refresh token and cause intermittent HTTP 401.
+        let raw=tokio::task::spawn_blocking(||crate::android_bridge::valid_native_session())
+            .await.map_err(|e|format!("Android Token 工作失敗: {e}"))??;
+        let session=parse_native_session(&raw)?;
+        // Mirror to the Tauri credential store only after the native
+        // session has been validated. Native remains the refresh authority.
+        let previous=crate::credentials::load().ok()
+            .and_then(|json|serde_json::from_str::<Session>(&json).ok());
+        let changed=previous.as_ref().is_none_or(|p|
+            p.access_token!=session.access_token ||
+            p.refresh_token!=session.refresh_token ||
+            p.account_id!=session.account_id ||
+            p.expires_at!=session.expires_at);
+        if changed{
+            crate::credentials::save(&serde_json::to_string(&session)
+                .map_err(|e|e.to_string())?)?;
+        }
+        return Ok(Access{token:session.access_token,account_id:Some(session.account_id)});
+    }
+    #[cfg(not(target_os="android"))]
+    {
     let stored=crate::credentials::load()?;
     let Ok(mut s)=serde_json::from_str::<Session>(&stored) else{
         return Ok(Access{token:stored,account_id:None});
@@ -157,6 +209,7 @@ pub async fn valid_access()->Result<Access,String>{
         save_session(&s)?;
     }
     Ok(Access{token:s.access_token,account_id:Some(s.account_id)})
+    }
 }
 #[cfg(test)]mod tests{
     use super::*;
