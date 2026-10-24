@@ -31,9 +31,9 @@ app.innerHTML=[
 '</main>',
 '<main class="page" id="page-schedule">',
 '<h3>模式</h3><div class="button-row mode-row"><select id="mode"><option value="off">關閉</option><option value="auto">配額重置後自動觸發</option><option value="custom">錨點＋自動接續</option></select><button id="apply-mode">套用</button></div>',
-'<section class="card compact"><h2>實際下一個 Alarm</h2><p id="alarm">尚未排程</p><small>Windows：App 執行中才能排程；關閉視窗仍常駐系統匣，結束 App 便停止，不使用 Android AlarmManager／保底 Job。</small></section>',
+'<section class="card compact"><h2>下次執行</h2><p id="alarm">尚未排程</p></section>',
 '<section class="card compact"><h2>預估</h2><p id="schedule-preview">排程已關閉</p></section>',
-'<p class="note">錨點到時若距 5h reset ≤ 60 秒，會等到 reset 後 15 秒再觸發；自動接續依後端實際 reset，不累積秒差。Windows 睡眠或結束 App 期間的逾期事件不會補執行。</p>',
+
 '<section class="card editor-card"><div class="card-title"><strong>每週預設</strong><button class="small" id="weekly-edit">編輯</button></div><p id="weekly-summary">—</p></section>',
 '<section class="card editor-card"><div class="card-title"><strong>今天</strong><button class="small" id="today-edit">編輯</button></div><p id="today-summary">使用每週預設</p></section>',
 '<section class="card editor-card"><div class="card-title"><strong>明天</strong><button class="small" id="tomorrow-edit">編輯</button></div><p id="tomorrow-summary">使用每週預設</p></section>',
@@ -48,14 +48,14 @@ app.innerHTML=[
 '<div class="button-row"><button class="action" id="login">登入</button><button class="action" id="logout">登出</button></div>',
 '<div class="setting-row"><label for="theme">主題</label><select id="theme"><option value="system">跟隨系統</option><option value="light">淺色</option><option value="dark">深色</option></select></div>',
 '<div class="setting-row"><label for="sample">採樣間隔</label><select id="sample"><option value="10">10 分鐘</option><option value="15">15 分鐘</option><option value="30">30 分鐘</option><option value="60">60 分鐘</option></select></div>',
-'<h3>Windows 系統通知</h3><div class="button-row"><label class="notification-switch"><input type="checkbox" id="native-toggle">開啟系統通知</label><button id="native-permission" class="small" hidden>允許通知</button></div><p class="note" id="native-status">正在檢查通知權限…</p>',
+'<h3>通知</h3><div class="button-row"><label class="notification-switch"><input type="checkbox" id="native-toggle">啟用通知</label><button id="native-permission" class="small" hidden>允許權限</button></div>',
 '<h3>ntfy（選用，預設關閉）</h3><input id="ntfy" type="url" spellcheck="false" placeholder="未設定，按「建立」產生隨機專屬網址">',
 '<div class="button-row ntfy-actions"><button id="ntfy-new">建立</button><button id="ntfy-test">測試</button><button id="ntfy-copy">複製</button><button id="ntfy-save">儲存</button></div>',
 '<p class="note">最近發送：<span id="ntfy-status">未設定</span></p>',
-'<section class="card compact"><h2>背景執行</h2><p>關閉視窗：持續監測。系統匣選擇「結束」：停止採樣、記錄及自動觸發。Windows 睡眠／關機時不會執行，重開 App 不補觸發。</p></section>',
-'<p class="note">CodexCredits · MIT · 使用的 Codex 後端介面可能變動。</p>',
+
+
 '</main></div>',
-'<output role="status" aria-live="polite" id="toast" class="toast" hidden></output>',
+'<div role="status" aria-live="polite" id="toast" class="toast" hidden><span id="toast-message"></span><button type="button" id="toast-close" aria-label="關閉通知" title="關閉">×</button></div>',
 '<dialog id="reset-dialog" class="modal"><h2 id="reset-dialog-title">Banked Reset</h2><p id="reset-dialog-desc"></p><div class="dialog-buttons">',
 '<button id="reset-arm">用盡後自動使用一次</button><button id="reset-exhausted">已用盡，立即重置</button><button id="reset-now">立即使用（含部分用量）</button><button id="reset-cancel">取消</button></div></dialog>',
 '<dialog id="rule-dialog" class="modal"><h2 id="rule-title">編輯排程</h2><p class="note">每個錨點可設定「後續自動」次數；每次依實際 5h reset 決定接續時間。</p><label class="override-row" id="override-wrap" hidden><input type="checkbox" id="override-checkbox">覆寫每週預設</label>',
@@ -65,41 +65,28 @@ app.innerHTML=[
 ].join("");
 const androidRuntime=/Android/i.test(navigator.userAgent);
 if(androidRuntime){
-  const alarmText=document.querySelector("#page-schedule .card.compact small");
-  if(alarmText)alarmText.textContent="Android：沿用原版 AlarmManager 與 JobScheduler 背景排程，支援重新開機後恢復。";
-  const background=document.querySelector("#page-settings .card.compact:last-of-type p");
-  if(background)background.textContent="Android：系統背景工作負責採樣與自動觸發；實際執行受省電政策、精確鬧鐘與通知權限影響。";
-  const heading=document.querySelector("#page-settings h3");
-  if(heading)heading.textContent="Android 系統通知";
+  // Advanced system settings appear only when a schedule is enabled and
+  // the essential exact-alarm permission is missing.
   const policy=document.createElement("section");
   policy.className="card compact";
-  policy.innerHTML=[
-    '<h2>Android 背景排程權限</h2>',
-    '<p id="android-platform-state">正在檢查精準鬧鐘與省電設定…</p>',
-    '<div class="button-row"><button id="android-exact">精準鬧鐘設定</button><button id="android-battery">電池最佳化</button></div>',
-    '<div class="button-row"><button id="android-app-settings">App 電池設定</button><button id="android-policy-refresh">重新檢查</button></div>'
-  ].join("");
+  policy.hidden=true;
+  policy.innerHTML='<h2>排程權限需要設定</h2><p>精準鬧鐘尚未允許，排程可能無法準時執行。</p><div class="button-row"><button id="android-exact">開啟設定</button></div>';
   document.querySelector("#page-settings")?.append(policy);
-  const policyRefresh=async()=>{
+  const checkAlarm=async()=>{
     try{
-      const value=await invoke<{exact_alarm:boolean;battery_exempt:boolean}>("android_platform_status");
-      const p=document.getElementById("android-platform-state");
-      if(p)p.textContent="精準鬧鐘："+(value.exact_alarm?"已允許":"尚未允許")
-        +" · 省電最佳化豁免："+(value.battery_exempt?"是":"否");
-    }catch(e){
-      const p=document.getElementById("android-platform-state");
-      if(p)p.textContent="無法讀取權限："+String(e);
+      const v=await invoke<{exact_alarm:boolean}>("android_platform_status");
+      policy.hidden=v.exact_alarm || snapshot?.settings.mode==="off";
+    }catch{
+      // A failed optional permission probe is not a permanent warning.
+      policy.hidden=true;
     }
   };
-  for(const [id,kind] of [["android-exact","exact"],["android-battery","battery"],["android-app-settings","app"]]){
-    document.getElementById(id)?.addEventListener("click",async()=>{
-      try{await invoke("android_open_system_settings",{kind});}
-      catch(e){const p=document.getElementById("android-platform-state");if(p)p.textContent=String(e);}
-    });
-  }
-  document.getElementById("android-policy-refresh")?.addEventListener("click",()=>void policyRefresh());
-  document.addEventListener("visibilitychange",()=>{if(!document.hidden)void policyRefresh();});
-  void policyRefresh();
+  document.getElementById("android-exact")?.addEventListener("click",async()=>{
+    try{await invoke("android_open_system_settings",{kind:"exact"});}
+    catch(e){toast(String(e));}
+  });
+  document.addEventListener("visibilitychange",()=>{if(!document.hidden)void checkAlarm();});
+  // Defined after initialization; no check runs until snapshot is available.
 }
 
 let snapshot:Snapshot|null=null;
@@ -111,7 +98,11 @@ let page="status";
 let theme="system";
 let notificationPermission:boolean|null=null;
 let notificationPermissionError="";
-let nextMessages:Array<string>=[];
+let toastTimer:ReturnType<typeof setTimeout>|undefined;
+let lastDisplayedError="";
+let loginInProgress=false;
+let lastForegroundRefresh=0;
+let refreshing=false;
 let editing:"weekly"|"today"|"tomorrow"="weekly";
 let draft:Rule[]=[];
 let overrideOn=false;
@@ -141,15 +132,24 @@ const allRules=(date:string)=>{
  const day=(new Date(date+"T12:00:00").getDay()+6)%7;
  return snapshot.settings.rules.filter(r=>r.enabled&&r.days[day]);
 };
-const toast=(message:string)=>{
- const node=$("toast");node.textContent=message;node.hidden=false;
- nextMessages.push(message);
- if(nextMessages.length>3)nextMessages.shift();
+const closeToast=()=>{
+ if(toastTimer!==undefined)clearTimeout(toastTimer);
+ toastTimer=undefined;
+ $("toast").hidden=true;
 };
-const closeToast=()=>{$("toast").hidden=true};
+const toast=(message:string)=>{
+ closeToast();
+ $("toast-message").textContent=message;
+ $("toast").hidden=false;
+ // Keep warnings a little longer but never cover the page indefinitely.
+ const duration=/失敗|錯誤|401|無法|權限|逾期|不允許/i.test(message)?8000:4000;
+ toastTimer=setTimeout(closeToast,duration);
+};
+$("toast-close").onclick=closeToast;
 const call=async<T>(name:string,args?:Record<string,unknown>):Promise<T>=>invoke<T>(name,args);
 
 function showPage(name:string){
+ if(name!==page)closeToast();
  page=name;
  if(name==="settings")void refreshNotificationPermission();
  for(const btn of Array.from(document.querySelectorAll<HTMLButtonElement>(".tab"))){
@@ -176,16 +176,9 @@ matchMedia("(prefers-color-scheme: dark)").addEventListener("change",()=>{if(the
 applyTheme("system");
 function renderNotificationStatus(){
  if(!snapshot)return;
- const optedIn=snapshot.settings.native_notify_enabled;
- const permission=notificationPermission===true?"系統權限：允許":
-                  notificationPermission===false?"系統權限：未允許":"系統權限：尚未確認";
- const portableNote=androidRuntime
-    ?"Android 通知依系統通知權限、電池最佳化與通知管道設定。"
-    :"Windows 原生通知須使用安裝版（Setup EXE）；免安裝版不保證能顯示通知。";
- $("native-status").textContent=(optedIn?"程式通知已開啟。":"程式通知已關閉。")+
-   " "+permission+"。 "+portableNote+
-   (notificationPermissionError?" 查詢錯誤："+notificationPermissionError:"");
- ($("native-permission") as HTMLButtonElement).hidden=notificationPermission!==false||!optedIn;
+ // The checkbox already conveys opt-in state. Show only actionable denial.
+ ($("native-permission") as HTMLButtonElement).hidden=
+   !(snapshot.settings.native_notify_enabled && notificationPermission===false);
 }
 async function refreshNotificationPermission(){
  try{notificationPermission=await isPermissionGranted();notificationPermissionError="";}
@@ -302,7 +295,7 @@ function render(){
   (global.p24!=null||global.p48!=null?" · "+(global.p24!=null?"24h "+global.p24+"%":"")+(global.p48!=null?" / 48h "+global.p48+"%":""):"")
   :"尚無資料 · codex-reset.com";
  ($("mode") as HTMLSelectElement).value=mode;
- $("alarm").textContent=s.next?fdate(new Date(s.next.at*1000).toISOString())+" · "+s.next.reason+"\nAlarm：桌面程式內執行 · 保底 Job：不適用 Windows":"尚未排程\nAlarm：未設定 · 保底 Job：不適用 Windows";
+ $("alarm").textContent=s.next?fdate(new Date(s.next.at*1000).toISOString())+" · "+s.next.reason:"尚未排程";
  $("schedule-preview").textContent=mode==="off"?"排程已關閉":mode==="auto"?"下一次以目前 quota reset 為基準":"下一錨點："+(s.next?fdate(new Date(s.next.at*1000).toISOString()):"尚未排程");
  $("weekly-summary").textContent=s.settings.rules.filter(r=>r.enabled).map(r=>ruleLabel(r,true)).join("\n")||"沒有錨點";
  for(const [key,date,output] of [["today",today(0),"today-summary"],["tomorrow",today(1),"tomorrow-summary"]] as const){
@@ -320,7 +313,9 @@ function render(){
  ($("ntfy-test") as HTMLButtonElement).disabled=!s.settings.ntfy_topic;
  ($("ntfy-copy") as HTMLButtonElement).disabled=!topic.value;
  if(theme!==s.settings.theme){applyTheme(s.settings.theme);}
- if(s.error){toast(s.error);}
+ if(s.error){
+  if(s.error!==lastDisplayedError){lastDisplayedError=s.error;toast(s.error);}
+ }else{lastDisplayedError="";}
  renderEvents();
  draw();
 }
@@ -352,13 +347,27 @@ async function loadHistory(){
  }catch(e){toast(String(e));}
 }
 async function refresh(){
+ if(refreshing)return;
+ refreshing=true;
  closeToast();
  try{await call("refresh");await Promise.all([load(),loadHistory()]);}
- catch(e){toast("更新失敗："+String(e));}
+ catch(e){toast("更新失敗："+String(e));await load();}
+ finally{refreshing=false;}
 }
+async function refreshIfStale(){
+ if(document.hidden||loginInProgress||refreshing)return;
+ const checked=snapshot?.usage?.checked_at?Date.parse(snapshot.usage.checked_at):0;
+ const now=Date.now();
+ if(Number.isFinite(checked)&&checked>0&&now-checked<90_000)return;
+ if(now-lastForegroundRefresh<30_000)return;
+ lastForegroundRefresh=now;
+ await refresh();
+}
+document.addEventListener("visibilitychange",()=>{if(!document.hidden)void refreshIfStale();});
+window.addEventListener("focus",()=>{void refreshIfStale();});
 $("top-refresh").onclick=refresh;$("check").onclick=refresh;
 $("trigger").onclick=async()=>{
- if(!confirm("要依 Android 原版發送最小 Codex 請求，建立 5 小時視窗嗎？這會消耗配額。"))return;
+ if(!confirm("將發送最小 Codex 請求，可能消耗配額。確定立即觸發？"))return;
  try{await call("manual_trigger");toast("手動觸發成功");await refresh();}
  catch(e){toast("手動觸發失敗："+String(e));}
 };
@@ -383,7 +392,7 @@ for(const [id,partial] of [["reset-exhausted",false],["reset-now",true]] as cons
 $("apply-mode").onclick=async()=>{
  if(!snapshot)return;
  const mode=($("mode") as HTMLSelectElement).value as Mode;
- if(mode!=="off"&&!confirm("確定啟用自動排程？程式存活時會依後端實際配額重置，自動發送消耗額度的 Codex 請求。Windows 睡眠或結束 App 時不執行。"))return;
+ if(mode!=="off"&&!confirm("啟用自動排程後，會依設定自動發送消耗配額的請求。確定啟用？"))return;
  try{await call("save_settings",{settings:{...snapshot.settings,mode}});toast("排程模式已更新");await load();}
  catch(e){toast(String(e));}
 };
@@ -410,10 +419,10 @@ $("native-permission").onclick=async()=>{
 
 $("sample").onchange=()=>{void settingsPatch({sampling_minutes:Number(($("sample") as HTMLSelectElement).value)});};
 $("login").onclick=async()=>{
- const b=$("login") as HTMLButtonElement;b.disabled=true;toast("請在瀏覽器完成 ChatGPT 登入（5 分鐘內）");
+ const b=$("login") as HTMLButtonElement;b.disabled=true;loginInProgress=true;toast("請在瀏覽器完成登入（5 分鐘內）");
  try{await call("login_with_chatgpt");await refresh();toast("登入成功");}
  catch(e){toast("登入失敗："+String(e));}
- finally{b.disabled=false;}
+ finally{b.disabled=false;loginInProgress=false;}
 };
 $("logout").onclick=async()=>{if(!confirm("登出 ChatGPT 並關閉自動排程？"))return;
  try{await call("sign_out");await load();toast("已登出；排程已關閉");}
