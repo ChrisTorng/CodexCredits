@@ -51,6 +51,12 @@ pub fn exchange_auth_code(payload:&str)->Result<String,String>{
 pub fn valid_native_session()->Result<String,String>{
     call("validNativeSession",&[])?.ok_or("Android OAuth credentials unavailable".into())
 }
+pub fn native_usage()->Result<String,String>{
+    call("nativeUsage",&[])?.ok_or("Android native usage response missing".into())
+}
+pub fn native_credits()->Result<String,String>{
+    call("nativeCredits",&[])?.ok_or("Android native credit response missing".into())
+}
 pub fn credential_get(key:&str)->Result<Option<String>,String>{call("readCredential",&[key])}
 pub fn credential_put(key:&str,value:&str)->Result<(),String>{
     call("writeCredential",&[key,value]).map(|_|())
