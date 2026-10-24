@@ -102,10 +102,15 @@ fn replan(s:&State){
 fn confirmed_primary(new:&api::Usage,prev:Option<&api::Usage>)->bool{
  let new_used=new.five_hour.unwrap_or(0.);
  if new_used>0.0001{return true;}
- let Some(old)=prev else{return false};
  let fresh=engine::reset_timestamp(new.five_reset.as_ref());
- let previous=engine::reset_timestamp(old.five_reset.as_ref());
  let timestamp=now();
+ // A valid 5h reset inside the current five-hour span means the window
+ // has already started, even when no quota has yet been consumed.
+ // This must match the pre-trigger refresh guard on the very first sample.
+ if new.five_hour.is_some() && fresh.is_some_and(|r|
+     r>timestamp && r<=timestamp+5*3600+60){return true;}
+ let Some(old)=prev else{return false};
+ let previous=engine::reset_timestamp(old.five_reset.as_ref());
  let old_confirmed=old.primary_confirmed && previous.is_some_and(|r|r>timestamp)
   && fresh.zip(previous).is_some_and(|(a,b)|(a-b).abs()<=120);
  let elapsed=chrono::DateTime::parse_from_rfc3339(&old.checked_at)
@@ -116,6 +121,33 @@ fn confirmed_primary(new:&api::Usage,prev:Option<&api::Usage>)->bool{
   .is_some_and(|r|timestamp>=r-900&&timestamp<=r+3600);
  let unexpected_weekly=old.weekly.zip(new.weekly).is_some_and(|(a,b)|a-b>2.)&&!natural_weekly;
  !unexpected_weekly && (old_confirmed||fixed)
+}
+#[cfg(test)]
+mod five_hour_detection_tests{
+ use super::*;
+ fn usage(reset:i64,used:f64)->api::Usage{
+  api::Usage{
+   five_hour:Some(used),
+   five_reset:Some(chrono::DateTime::<chrono::Utc>::from_timestamp(reset,0).unwrap().to_rfc3339()),
+   ..api::Usage::default()
+  }
+ }
+ #[test]
+ fn active_zero_usage_is_detected_at_first_refresh(){
+  // An anchored 06:00 window may still have 100% remaining at 10:10.
+  let q=usage(now()+50*60,0.);
+  assert!(confirmed_primary(&q,None));
+ }
+ #[test]
+ fn no_reset_means_not_yet_confirmed(){
+  let q=api::Usage{five_hour:Some(0.),..api::Usage::default()};
+  assert!(!confirmed_primary(&q,None));
+ }
+ #[test]
+ fn far_future_reset_does_not_assert_current_window(){
+  let q=usage(now()+2*24*3600,0.);
+  assert!(!confirmed_primary(&q,None));
+ }
 }
 async fn refresh_internal(s:&State,force_aux:bool)->Result<api::Usage,String>{
  let _guard=s.updating.lock().await;
