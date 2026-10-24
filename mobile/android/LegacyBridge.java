@@ -43,6 +43,57 @@ public final class LegacyBridge {
         }
     }
 
+    // The legacy Android scheduler and the Tauri UI must share a single
+    // authoritative token store. Do not run a second Rust refresh-token flow.
+    private static String currentNativeSession(Context c) throws Exception {
+        SecureStore s=new SecureStore(c);
+        String access=s.get("access_token");
+        String account=s.get("account_id");
+        String expires=s.get("expires_at_ms");
+        if(access==null || access.isEmpty() || account==null || account.isEmpty() || expires==null)
+            throw new IllegalStateException("Android credentials are incomplete; sign in again");
+        JSONObject value=new JSONObject()
+            .put("access_token",access)
+            .put("account_id",account)
+            .put("expires_at",Long.parseLong(expires)/1000L);
+        String refresh=s.get("refresh_token");
+        if(refresh!=null&&!refresh.isEmpty())value.put("refresh_token",refresh);
+        return value.toString();
+    }
+
+    private static String authFailure(Exception e){
+        String message=e.getMessage()==null?"":e.getMessage();
+        if(message.contains("HTTP 401"))return "OAuth HTTP 401: 請重新登入";
+        if(message.contains("HTTP 400"))return "OAuth HTTP 400: 授權碼可能已失效，請重新登入";
+        // Keep diagnostics short; never print credentials or authorization codes.
+        if(message.length()>160)message=message.substring(0,160);
+        return e.getClass().getSimpleName()+": "+message;
+    }
+
+    @Keep
+    public static synchronized String exchangeAuthCode(Context c,String payload){
+        try {
+            JSONObject args=new JSONObject(payload);
+            new CodexClient(c).exchangeCode(args.getString("code"),
+                args.getString("verifier"),args.getString("redirect"));
+            return currentNativeSession(c);
+        }catch(Exception e){
+            try{return new JSONObject().put("error",authFailure(e)).toString();}
+            catch(Exception ignored){return "{\\"error\\":\\"Android OAuth exchange failed\\"}";}
+        }
+    }
+
+    @Keep
+    public static synchronized String validNativeSession(Context c){
+        try {
+            new CodexClient(c).validAccessToken();
+            return currentNativeSession(c);
+        }catch(Exception e){
+            try{return new JSONObject().put("error",authFailure(e)).toString();}
+            catch(Exception ignored){return "{\\"error\\":\\"Android OAuth refresh failed\\"}";}
+        }
+    }
+
     @Keep
     public static String readCredential(Context c,String key){
         return new SecureStore(c).get("cc2_"+key);
