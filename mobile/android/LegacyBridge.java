@@ -95,6 +95,49 @@ public final class LegacyBridge {
     }
 
     @Keep
+    public static String nativeUsage(Context c){
+        try {
+            CodexClient.Quota q=new CodexClient(c).getQuota();
+            JSONObject result=new JSONObject()
+                .put("five_hour",q.primary==null?JSONObject.NULL:q.primary.usedPercent)
+                .put("weekly",q.secondary==null?JSONObject.NULL:q.secondary.usedPercent)
+                .put("five_reset",q.primary==null || q.primary.resetAt<=0?JSONObject.NULL:
+                    java.time.Instant.ofEpochSecond(q.primary.resetAt).toString())
+                .put("weekly_reset",q.secondary==null || q.secondary.resetAt<=0?JSONObject.NULL:
+                    java.time.Instant.ofEpochSecond(q.secondary.resetAt).toString())
+                .put("plan",q.plan)
+                .put("allowed",q.allowed)
+                .put("limit_reached",q.limitReached)
+                .put("primary_confirmed",false)
+                .put("checked_at",java.time.Instant.now().toString());
+            return result.toString();
+        }catch(Exception e){
+            try{return new JSONObject().put("error",authFailure(e)).toString();}
+            catch(Exception ignored){return "{}";}
+        }
+    }
+
+    @Keep
+    public static String nativeCredits(Context c){
+        try {
+            CodexClient.ResetCredits credits=new CodexClient(c).getResetCredits();
+            JSONArray available=new JSONArray();
+            for(CodexClient.ResetCredit credit:credits.available){
+                available.put(new JSONObject()
+                    .put("id",credit.id)
+                    .put("title",credit.title==null?"":credit.title)
+                    .put("description",credit.description==null?"":credit.description)
+                    .put("expires_at",credit.expiresAt==null?"":credit.expiresAt));
+            }
+            return new JSONObject().put("count",credits.availableCount)
+                .put("available",available).toString();
+        }catch(Exception e){
+            try{return new JSONObject().put("error",authFailure(e)).toString();}
+            catch(Exception ignored){return "{}";}
+        }
+    }
+
+    @Keep
     public static String readCredential(Context c,String key){
         return new SecureStore(c).get("cc2_"+key);
     }
