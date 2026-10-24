@@ -79,7 +79,7 @@ public final class LegacyBridge {
             return currentNativeSession(c);
         }catch(Exception e){
             try{return new JSONObject().put("error",authFailure(e)).toString();}
-            catch(Exception ignored){return "{\\"error\\":\\"Android OAuth exchange failed\\"}";}
+            catch(Exception ignored){return "{}";}
         }
     }
 
@@ -90,7 +90,7 @@ public final class LegacyBridge {
             return currentNativeSession(c);
         }catch(Exception e){
             try{return new JSONObject().put("error",authFailure(e)).toString();}
-            catch(Exception ignored){return "{\\"error\\":\\"Android OAuth refresh failed\\"}";}
+            catch(Exception ignored){return "{}";}
         }
     }
 
