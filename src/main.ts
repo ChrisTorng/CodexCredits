@@ -1,7 +1,13 @@
 import {invoke} from "@tauri-apps/api/core";
 import {listen} from "@tauri-apps/api/event";
 import {isPermissionGranted,requestPermission} from "@tauri-apps/plugin-notification";
-import * as echarts from "echarts";
+// Register only the line charts and components used by this UI.
+import * as echarts from "echarts/core";
+import {LineChart} from "echarts/charts";
+import {GridComponent,TooltipComponent,LegendComponent,TitleComponent,MarkLineComponent,GraphicComponent} from "echarts/components";
+import {CanvasRenderer} from "echarts/renderers";
+
+echarts.use([LineChart,GridComponent,TooltipComponent,LegendComponent,TitleComponent,MarkLineComponent,GraphicComponent,CanvasRenderer]);
 import "./style.css";
 
 type Mode="off"|"auto"|"custom";
@@ -109,6 +115,8 @@ let overrideOn=false;
 const charts:Record<string,echarts.ECharts>={};
 const chartIds=["primary-chart","weekly-chart","yesterday-chart","today-chart"] as const;
 const getChart=(id:string)=>charts[id]??(charts[id]=echarts.init($(id),undefined,{renderer:"canvas"}));
+// Hidden pages have no layout box. Let ECharts resize only the visible instances.
+const resizeVisibleCharts=()=>{for(const id of chartIds){if($(id).getClientRects().length)charts[id]?.resize();}};
 const safeRemaining=(used:number|null|undefined)=>used==null?null:Math.max(0,Math.min(100,100-used));
 const percent=(used:number|null|undefined)=>{const n=safeRemaining(used);return n==null?"—":Math.round(n)+"% 剩餘"};
 const fdate=(s:string|null|undefined)=>s?new Date(s).toLocaleString("zh-TW",{month:"numeric",day:"numeric",hour:"2-digit",minute:"2-digit",hour12:false}):"—";
@@ -159,7 +167,7 @@ function showPage(name:string){
  for(const item of Array.from(document.querySelectorAll<HTMLElement>(".page"))){
   item.classList.toggle("visible",item.id==="page-"+name);
  }
- window.requestAnimationFrame(()=>{Object.values(charts).forEach(c=>c.resize());draw();});
+ window.requestAnimationFrame(()=>{resizeVisibleCharts();draw();});
 }
 for(const btn of Array.from(document.querySelectorAll<HTMLButtonElement>(".tab"))){
  btn.onclick=()=>showPage(btn.dataset.tab??"status");
@@ -356,11 +364,19 @@ async function loadHistory(){
   samples=chronological(history);events=logs;renderEvents();draw();
  }catch(e){toast(String(e));}
 }
+// Read one consistent snapshot (including quota samples and events) over one IPC call.
+async function loadLocalState(){
+ const cached=await call<LocalState>("get_local_state");
+ snapshot=cached.snapshot;
+ samples=chronological(cached.history);
+ events=cached.events;
+ render();
+}
 async function refresh(){
  if(refreshing)return;
  refreshing=true;
  closeToast();
- try{await call("refresh");await Promise.all([load(),loadHistory()]);}
+ try{await call("refresh");await loadLocalState();}
  catch(e){toast("更新失敗："+String(e));await load();}
  finally{refreshing=false;}
 }
@@ -570,26 +586,27 @@ $("rule-save").onclick=async()=>{
  try{await call("save_settings",{settings});($("rule-dialog") as HTMLDialogElement).close();await load();toast("排程設定已儲存");}
  catch(e){toast("無法儲存排程："+String(e));}
 };
-window.addEventListener("resize",()=>{Object.values(charts).forEach(c=>c.resize());draw();});
-const obs=new ResizeObserver(()=>{Object.values(charts).forEach(c=>c.resize());});
+window.addEventListener("resize",resizeVisibleCharts);
+const obs=new ResizeObserver(resizeVisibleCharts);
 obs.observe($("app"));
-void listen("credits:updated",async()=>{await Promise.allSettled([load(),loadHistory()]);});
+void listen("credits:updated",async()=>{
+ try{await loadLocalState();}
+ catch{await Promise.allSettled([load(),loadHistory()]);}
+});
 type LocalState={snapshot:Snapshot;history:Sample[];events:Event[]};
 async function initialize(){
 
  // Load persisted samples and events first, independent of OAuth, quota API,
  // or slow startup network operations. Never require "更新配額" to restore history.
  try{
-  const cached=await call<LocalState>("get_local_state");
-  snapshot=cached.snapshot;samples=chronological(cached.history);events=cached.events;
-  render();
+  await loadLocalState();
 
  }catch(e){
 
   toast("讀取本機資料失敗："+String(e));
   await Promise.allSettled([loadHistory(),load()]);
  }
- requestAnimationFrame(()=>{Object.values(charts).forEach(c=>c.resize());draw();});
+ requestAnimationFrame(()=>{resizeVisibleCharts();draw();});
  await refreshNotificationPermission();
 }
 void initialize();
