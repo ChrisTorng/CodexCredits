@@ -8,29 +8,29 @@ These instructions apply to CodexCredits, including Android builds and release d
 
 - On 2026-10-22 and 2026-10-29, direct GitHub Release asset URLs (`https://github.com/.../releases/download/...apk`) opened through the ChatGPT Android in-app browser showed the full byte count, but stayed at **Downloading...** without finishing.
 - On 2026-10-29, a ChatGPT sandbox APK link (`sandbox:/mnt/data/CodexCredits-Android-v2.0.8-arm64.apk`) instead failed with **Library file not found**, even though that path existed and the APK hash matched the release.
-- Earlier assistant replies provided sandbox APK files for v2.0.5 / v2.0.6 / v2.0.7, but no retrieved user message conclusively confirmed that the sandbox delivery method worked. **Do not claim a delivery method has been successfully tested by the user without actual confirmation.** Verifying a container path proves bytes exist in the execution container, not that the mobile attachment service can resolve them.
+- **Successful delivery can be implicit.** Following ChatGPT APK deliveries between 2026-10-21 and 2026-10-24, the user reported installing and running the app, signing in, testing manual triggering, and reporting UI behavior. These follow-up tests are valid evidence that download/install succeeded without saying the words 'download succeeded'. Later, v2.0.8 sandbox attachment failed with 'Library file not found', so old successes do not guarantee current attachment delivery.
 
 ### Required build and verification
 
-1. Build from the intended CodexCredits commit. Use the signed-release GitHub Actions workflow in `ChrisTorng/android-codex-tools/.github/workflows/codexcredits-vNNN-release.yml`; the original repo holds the legacy-compatible signing identity. Confirm that the specific signing workflow finished successfully, rather than relying solely on the unsigned build.
-2. Obtain the `CodexCredits-Android-vX.Y.Z-Signed-Release` Actions artifact (a ZIP), not a random or unsigned APK. Download/materialize the bytes into the current execution container, and extract `CodexCredits-Android-vX.Y.Z-arm64.apk`.
-3. Verify APK integrity, exact byte size and SHA-256, and match them against the release asset's published SHA-256/size when available. Ensure the signing workflow validated application ID, `versionCode`, original signing certificate, and JNI entries. Never state an unperformed check was successful.
-4. If providing a ChatGPT-local file, **create/register a new user-visible attachment in the current response** and verify its exact file path. Use a real file artifact handoff when supported; do not assume that referencing `sandbox:/mnt/data/...` is enough to make a file retrievable in the ChatGPT Android UI. Prefer both a standalone APK and a separate ZIP containing the APK, clearly labeled. The ZIP must actually contain the verified signed APK. Never link to a path that wasn't created or verified in the current container session.
-5. **Never claim that ChatGPT sandbox downloads are a confirmed reliable workaround.** The mobile client has shown "Library file not found." State the limitation and provide a practical independent fallback: open the GitHub **Release page** in an external browser (Chrome or Samsung Internet; use the in-app browser's `⋮` → `Open in browser` option), then select the APK under Assets. Alternatively, open the successful GitHub Actions run in an external browser and download/extract its signed-release ZIP artifact if signed in to GitHub. Do not use the direct `releases/download/...apk` endpoint as the in-app download link or wrap it in a button.
-6. If both delivery methods fail, do not repeat them or falsely declare success. Diagnose where the failure occurs and consider a separate first-party static file host/CDN (for example an already authorized Cloudflare R2 custom-domain download endpoint) with a proper Android APK content type and download disposition **after confirming that the hosting resource is available and the file was actually uploaded and tested**.
-7. A release is complete when the APK builds and is published; **user download success is a separate outcome** that cannot be inferred from CI success or a valid SHA-256.
+1. Produce the APK from the intended CodexCredits commit with the original, upgrade-compatible Android signing identity. Confirm that the matching signed-release Actions run succeeded and verified package ID, versionCode, signing certificate and JNI methods.
+2. Verify actual APK byte size, ZIP package structure and SHA-256 against the release asset; do not confuse a signed APK with the Actions ZIP artifact.
+3. **The default Android download must take one tap.** Do not require ChatGPT Library, locating a folder, an external browser, a GitHub Actions login, or extracting a ZIP.
+4. Direct-download endpoint (not GitHub Releases asset redirect):
 
-### Persistent ChatGPT Library fallback
+   https://raw.githubusercontent.com/ChrisTorng/android-codex-tools/apk-download/CodexCredits-Android.apk
 
-If the chat attachment returns `Library file not found`, a separate Library upload may create an independently accessible persistent copy. With the user's request to receive the APK, save the verified APK and optionally a ZIP under `/CodexCredits/` using the Files Library upload operation, and then verify them using a Library listing. The full Library experience is available on the ChatGPT **web** interface; direct the user to open the ChatGPT website in an external browser, select Library (or Space if renamed), find `CodexCredits/`, select the file and Download. **An upload success does not prove the user's mobile download will succeed.** Do not repeatedly insist on broken chat-attachment links.
+   The dedicated apk-download branch in ChrisTorng/android-codex-tools contains a signed APK named CodexCredits-Android.apk and VERSION.txt. The automation is .github/workflows/direct-apk-download.yml; it fetches the published signed release, verifies the official SHA-256 and copies its bytes to that branch. On 2026-10-29 its Git blob hash was confirmed identical to the v2.0.8 signed APK. Mobile download behavior of this new endpoint has not yet been confirmed by the user; do not claim otherwise.
+5. **For every newer release**, explicitly dispatch direct-apk-download.yml with that version's existing signed release tag. GitHub GITHUB_TOKEN-generated release events may not trigger another workflow automatically. Confirm the mirror run succeeded, VERSION.txt indicates the intended version, and the Git blob hash/byte size match the signed APK. Only then share the fixed latest-APK URL.
+6. A sandbox:/mnt/data/*.apk chat attachment is an acceptable alternative when the active conversation genuinely registers a retrievable file. APKs attached earlier were followed by successful installation tests; the later v2.0.8 link failed with 'Library file not found'. Never repeatedly give a broken sandbox path or mistake file existence in a runtime for mobile attachment availability.
+7. Do not provide a github.com/.../releases/download/...apk direct GitHub Release asset URL as the main mobile link: it stalled at 'Downloading...' after reaching 100%. The GitHub Release page is suitable for release notes and history, not as the default download process.
+8. Do not send the user through ChatGPT Library or make them manually download and unzip an artifact. If the one-tap static link is also broken on the phone, diagnose and repair direct hosting.
+9. User reports of successfully running/testing the newly provided build count as implicit confirmation of successful download and installation. CI success alone does not.
 
-### User-facing release links
+### User-facing download links
 
-- GitHub Release **page** for provenance or external-browser downloads: `https://github.com/ChrisTorng/android-codex-tools/releases/tag/codexcredits-android-vX.Y.Z-release`.
-- Signed Actions run page for an artifact ZIP fallback.
-- When the current conversation supports working attachments, give a freshly registered, verified APK file link and optional ZIP link. Do not reuse old conversation sandbox paths.
-- If the in-app direct APK link fails, immediately switch to external-browser or other hosting options. **Do not send the user through the same broken pathway again.**
-
+- One-tap APK: https://raw.githubusercontent.com/ChrisTorng/android-codex-tools/apk-download/CodexCredits-Android.apk (only after verifying the expected mirror version).
+- Optional freshly registered ChatGPT APK attachment when it is retrievable.
+- Release history: https://github.com/ChrisTorng/android-codex-tools/releases
 ## Android upgrade compatibility
 
 - Android application ID: `com.christorng.androidcodextools`.
@@ -41,4 +41,4 @@ If the chat attachment returns `Library file not found`, a separate Library uplo
 
 ## Release response checklist
 
-Signed workflow success; correct package/signature/version checks; verified APK bytes and SHA-256; actual user-accessible delivery path(s); explicit instructions for external-browser fallback; do not claim mobile download success without user confirmation.
+Signed workflow success, original signing identity and version checks, verified APK SHA-256 and size, matching direct mirror version and Git blob; one-tap direct APK link without Library or ZIP extraction. Recognize implicit successful installation from subsequent user testing, but do not claim an untested new hosting endpoint has been proven on the user's phone.
