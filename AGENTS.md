@@ -20,6 +20,10 @@ These instructions apply to CodexCredits, including Android builds and release d
 6. If both delivery methods fail, do not repeat them or falsely declare success. Diagnose where the failure occurs and consider a separate first-party static file host/CDN (for example an already authorized Cloudflare R2 custom-domain download endpoint) with a proper Android APK content type and download disposition **after confirming that the hosting resource is available and the file was actually uploaded and tested**.
 7. A release is complete when the APK builds and is published; **user download success is a separate outcome** that cannot be inferred from CI success or a valid SHA-256.
 
+### Persistent ChatGPT Library fallback
+
+If the chat attachment returns `Library file not found`, a separate Library upload may create an independently accessible persistent copy. With the user's request to receive the APK, save the verified APK and optionally a ZIP under `/CodexCredits/` using the Files Library upload operation, and then verify them using a Library listing. The full Library experience is available on the ChatGPT **web** interface; direct the user to open the ChatGPT website in an external browser, select Library (or Space if renamed), find `CodexCredits/`, select the file and Download. **An upload success does not prove the user's mobile download will succeed.** Do not repeatedly insist on broken chat-attachment links.
+
 ### User-facing release links
 
 - GitHub Release **page** for provenance or external-browser downloads: `https://github.com/ChrisTorng/android-codex-tools/releases/tag/codexcredits-android-vX.Y.Z-release`.
