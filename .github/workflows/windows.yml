@@ -20,6 +20,7 @@ jobs:
           node-version: '22'
       - run: npm install
       - run: npm run build
+      - run: npm run test:charts
       - run: cargo test --manifest-path src-tauri/Cargo.toml
       - run: npm run tauri build -- --no-bundle
       - name: Build Windows NSIS installer for native notifications

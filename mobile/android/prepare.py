@@ -21,7 +21,10 @@ names=["AlarmReceiver","AndroidNotifications","BackupJobService","BootReceiver",
        "CodexClient","SamplingJobService","ScheduleConfig","Scheduler",
        "SecureStore","UsageHistory"]
 for name in names:
-    (out/(name+".java")).write_bytes((old/(name+".java")).read_bytes())
+    # Only UsageHistory is patched: retain the original Android scheduler and
+    # correct Global Reset identification for operator-observed events.
+    source=(Path("mobile/android")/(name+".java")) if name=="UsageHistory" else (old/(name+".java"))
+    (out/(name+".java")).write_bytes(source.read_bytes())
 (out/"LegacyBridge.java").write_bytes(Path("mobile/android/LegacyBridge.java").read_bytes())
 # Required: Rust resolves LegacyBridge methods by exact JNI names at runtime.
 (project/"jni-keep.pro").write_bytes(Path("mobile/android/jni-keep.pro").read_bytes())

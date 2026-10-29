@@ -109,7 +109,7 @@ pub async fn trigger_minimal(token:&str,account_id:Option<&str>)->Result<(),Stri
  if !response.status().is_success(){return Err(format!("立即觸發 HTTP {}",response.status()));}
  Ok(())
 }
-pub async fn global_reset()->Result<Global,String>{
+pub async fn global_reset()->Result<(Global,Vec<i64>),String>{
  let client=http()?;
  let forecast=client.get("https://codex-reset.com/api/forecast")
   .header("User-Agent","CodexCredits/0.2").send().await.map_err(|e|e.to_string())?;
@@ -117,10 +117,27 @@ pub async fn global_reset()->Result<Global,String>{
  let v:Value=forecast.json().await.map_err(|e|e.to_string())?;
  let mut last=v["last_reset_at"].as_str().map(str::to_owned);
  let mut gaps:Vec<f64>=Vec::new();
+ let mut verified_resets:Vec<i64>=Vec::new();
  // Android source: only announced reset events in the public timeline count.
  if let Ok(response)=client.get("https://codex-reset.com/api/timeline")
      .header("User-Agent","CodexCredits/0.2").send().await{
   if let Ok(timeline)=response.json::<Value>().await{
+   // Verified observed global resets are frequently tagged "operator-observed"
+   // with medium confidence. "archive/high" alone excludes real resets.
+   verified_resets=timeline["events"].as_array().into_iter().flatten()
+    .filter(|e|e["group"].as_str()==Some("reset")
+      && e["announcement_state"].as_str()==Some("announced")
+      && e["confirmed"].as_bool()==Some(true)
+      && (e["observation_result"].as_str()==Some("reset_observed")
+       || (e["source"].as_str()==Some("archive")
+        && e["confidence"].as_str()==Some("high"))))
+    .filter_map(|e|e["effective_at"].as_str()
+       .or_else(||e["observed_at"].as_str())
+       .or_else(||e["announced_at"].as_str()))
+    .filter_map(|iso|chrono::DateTime::parse_from_rfc3339(iso).ok())
+    .map(|t|t.timestamp()).collect();
+   verified_resets.sort_unstable();
+   verified_resets.dedup();
    let mut resets:Vec<chrono::DateTime<chrono::FixedOffset>>=timeline["events"].as_array()
     .into_iter().flatten()
     .filter(|e|e["group"].as_str().is_some_and(|v|v.eq_ignore_ascii_case("reset"))
@@ -145,10 +162,10 @@ pub async fn global_reset()->Result<Global,String>{
   .zip(median).and_then(|(time,days)|{
    chrono::Duration::try_seconds((days*86400.) as i64).map(|delta|time+delta)
   }).map(|time|time.to_rfc3339());
- Ok(Global{last_reset_at:last,age_days:v["age_days"].as_f64(),
+ Ok((Global{last_reset_at:last,age_days:v["age_days"].as_f64(),
   p24:v["probabilities"]["rounded_24h"].as_i64(),
   p48:v["probabilities"]["rounded_48h"].as_i64(),
-  avg_days:avg,median_days:median,median_estimate_at:estimate})
+  avg_days:avg,median_days:median,median_estimate_at:estimate},verified_resets))
 }
 pub async fn ntfy_send(topic:&str,title:&str,message:&str)->Result<(),String>{
  let url=url::Url::parse(topic).map_err(|_|"ntfy 網址格式錯誤")?;

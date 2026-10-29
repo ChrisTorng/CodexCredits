@@ -8,6 +8,7 @@ import {GridComponent,TooltipComponent,LegendComponent,TitleComponent,MarkLineCo
 import {CanvasRenderer} from "echarts/renderers";
 
 echarts.use([LineChart,GridComponent,TooltipComponent,LegendComponent,TitleComponent,MarkLineComponent,GraphicComponent,CanvasRenderer]);
+import {actualFiveHourWindows,scheduledFiveHourWindows,idealSegment,windowBoundaries,clockLabel,FIVE_HOUR_MS} from "./chart-windows";
 import "./style.css";
 
 type Mode="off"|"auto"|"custom";
@@ -195,76 +196,111 @@ async function refreshNotificationPermission(){
 }
 function chartPalette(){return theme==="dark"||(theme==="system"&&matchMedia("(prefers-color-scheme: dark)").matches)
  ?{text:"#a6acb7",grid:"#3d424b",bg:"#1f2227"}:{text:"#737983",grid:"#e2e5ea",bg:"#ffffff"};}
+// Draw precise beginning/end markers instead of rounded fixed-hour ticks.
 function paintQuota(id:string,used:number|null|undefined,reset:string|null|undefined,weekly:boolean,confirmed:boolean){
  const chart=getChart(id),p=chartPalette();
- const until=reset?new Date(reset).getTime():0,span=(weekly?7*24:5)*3600000;
- const start=until-span;
- const source=samples.filter(x=>{
-  const t=new Date(x.at).getTime();
-  const r=weekly?x.weekly_reset:x.five_reset;
-  return t>=start-60000&&t<=until+60000&&r&&Math.abs(new Date(r).getTime()-until)<=300000;
- });
- const valid=until>0&&(weekly||confirmed);
+ const until=reset?Date.parse(reset):NaN,span=weekly?7*24*3600000:FIVE_HOUR_MS;
+ const valid=Number.isFinite(until)&&until>0&&(weekly||confirmed);
+ const start=valid?until-span:0;
+ const source=valid?samples.filter(x=>{
+  const t=Date.parse(x.at),r=weekly?x.weekly_reset:x.five_reset;
+  return t>=start-60000&&t<=until+60000&&r&&Math.abs(Date.parse(r)-until)<=120000;
+ }):[];
  const color=weekly?"#e89134":"#2f80ed";
- const actual=source.map(s=>[new Date(s.at).getTime(),safeRemaining(weekly?s.weekly:s.five_hour)]);
+ const actual=source.map(x=>[Date.parse(x.at),safeRemaining(weekly?x.weekly:x.five_hour)]);
  const ideal=valid?[[start,100],[until,0]]:[];
- const mark=Date.now()>=start&&Date.now()<=until?{xAxis:Date.now()}:undefined;
+ const now=Date.now();
+ const inWindow=valid&&now>=start&&now<=until;
+ const boundary=(time:number,right:boolean)=>({
+  type:"text",bottom:0,...(right?{right:0}:{left:0}),
+  silent:true,style:{text:clockLabel(time,true),fill:p.text,fontSize:10}
+ });
  chart.setOption({
-  backgroundColor:"transparent",
-  animation:false,
+  backgroundColor:"transparent",animation:false,
   grid:{left:5,right:5,top:6,bottom:20,containLabel:false},
-  xAxis:{type:"time",min:valid?start:undefined,max:valid?until:undefined,axisLine:{show:false},
-    splitLine:{show:true,lineStyle:{color:p.grid}},axisLabel:{fontSize:9,color:p.text,hideOverlap:true,formatter:(v:number)=>weekly?new Date(v).getDate().toString():String(new Date(v).getHours()).padStart(2,"0")},axisTick:{show:false}},
+  xAxis:{type:"time",min:valid?start:undefined,max:valid?until:undefined,
+   axisLine:{show:false},splitLine:{show:!valid,lineStyle:{color:p.grid}},axisLabel:{show:!valid},axisTick:{show:false}},
   yAxis:{type:"value",min:0,max:100,interval:50,axisLabel:{show:false},axisLine:{show:false},axisTick:{show:false},splitLine:{lineStyle:{color:p.grid}}},
-  tooltip:{trigger:"axis",valueFormatter:(value:unknown)=>typeof value==="number"?Math.round(value)+"% 剩餘":String(value)},
+  tooltip:{trigger:"axis",valueFormatter:(v:unknown)=>typeof v==="number"?Math.round(v)+"% 剩餘":String(v)},
   series:[
    {name:"理想剩餘",type:"line",data:ideal,showSymbol:false,silent:true,lineStyle:{color,type:"dashed",width:1.5,opacity:.8},areaStyle:{color,opacity:.08}},
    {name:"實際剩餘",type:"line",data:valid?actual:[],showSymbol:false,lineStyle:{width:2.4,color},itemStyle:{color},areaStyle:{color,opacity:.18},
-      markLine:mark?{symbol:["none","none"],silent:true,label:{show:false},lineStyle:{color:p.text,width:1},data:[mark]}:undefined}
+    markLine:valid?{symbol:["none","none"],silent:true,label:{show:false},
+      lineStyle:{color:p.grid,width:1,type:"solid"},
+      data:[{xAxis:start},{xAxis:until},...(inWindow?[{xAxis:now,lineStyle:{color:p.text,type:"dashed",width:1}}]:[])]}:undefined}
   ],
-  graphic:!valid?[{type:"text",left:10,top:"45%",style:{text:
-     !snapshot?.signed_in?"請先登入":
-     !snapshot?.usage?.checked_at?"正在取得最新配額…":
-     (Date.now()-Date.parse(snapshot.usage.checked_at)>15*60000)?"等待更新配額…":
-     weekly?"未啟動":"尚未啟動 · 等待觸發",
-     fill:p.text,fontSize:11}}]:[]
+  graphic:valid?[boundary(start,false),boundary(until,true)]:[{
+   type:"text",left:10,top:"45%",style:{text:
+    !snapshot?.signed_in?"請先登入":
+    !snapshot?.usage?.checked_at?"正在取得最新配額…":
+    (now-Date.parse(snapshot.usage.checked_at)>15*60000)?"等待更新配額…":
+    weekly?"未啟動":"尚未啟動 · 等待觸發",fill:p.text,fontSize:11}
+  }]
  },true);
 }
 function paintHistory(id:string,offset:number){
  const chart=getChart(id),p=chartPalette();
  const day=new Date();day.setHours(0,0,0,0);day.setDate(day.getDate()+offset);
- const start=day.getTime(),end=start+86400000;
- const todaySamples=samples.filter(s=>{const t=new Date(s.at).getTime();return t>=start&&t<end;});
+ const following=new Date(day);following.setDate(following.getDate()+1);
+ const start=day.getTime(),end=following.getTime(),now=Date.now();
+ const todaySamples=samples.filter(s=>{const t=Date.parse(s.at);return t>=start&&t<end;});
  const actual=(key:"five_hour"|"weekly")=>todaySamples.map((s,i)=>{
   const current=key==="five_hour"?s.five_reset:s.weekly_reset;
   const before=i>0?(key==="five_hour"?todaySamples[i-1].five_reset:todaySamples[i-1].weekly_reset):current;
-  return [new Date(s.at).getTime(),current&&before&&Math.abs(new Date(current).getTime()-new Date(before).getTime())>300000?null:safeRemaining(s[key])];
+  return [Date.parse(s.at),current&&before&&Math.abs(Date.parse(current)-Date.parse(before))>300000?null:safeRemaining(s[key])];
  });
- const ideal=(reset:string|null|undefined,hours:number)=>{
-  if(!reset)return [];
-  const e=new Date(reset).getTime(),s=e-hours*3600000;
-  const a=Math.max(s,start),b=Math.min(e,end);
-  return b>a?[[a,100-(a-s)/(e-s)*100],[b,100-(b-s)/(e-s)*100]]:[];
- };
  const u=snapshot?.usage;
- const globalTime=snapshot?.global?.last_reset_at?new Date(snapshot.global.last_reset_at).getTime():null;
- const globalMark=globalTime!=null&&globalTime>=start&&globalTime<end?
-  {symbol:["none","none"],silent:true,label:{show:false},
-   lineStyle:{type:"dashed",color:"#999",width:1},data:[{xAxis:globalTime}]}:undefined;
+ const history=actualFiveHourWindows(samples,u?.five_reset,!!u?.primary_confirmed,now)
+  .filter(w=>w.end>start&&w.start<end);
+ const planned=scheduledFiveHourWindows(snapshot?.next,now,start,end,history);
+ const windows=[...history,...planned].sort((a,b)=>a.start-b.start);
+ const boundaries=windowBoundaries(windows,start,end);
+ const globalTime=snapshot?.global?.last_reset_at?Date.parse(snapshot.global.last_reset_at):NaN;
+ const globalMark=Number.isFinite(globalTime)&&globalTime>=start&&globalTime<end?
+  {xAxis:globalTime,lineStyle:{type:"dashed",color:"#999",width:1},
+   label:{show:true,formatter:"Global "+clockLabel(globalTime),position:"insideEndBottom",color:p.text,fontSize:9}}:null;
+ const markData=boundaries.map(t=>({
+  xAxis:t,lineStyle:{type:"solid",color:p.grid,width:1.3},
+  label:{show:true,formatter:clockLabel(t),position:"insideEndTop",color:p.text,fontSize:9}
+ }));
  const palette=[["5 小時","#2f80ed"],["週配額","#e89134"]] as const;
+ const span=7*24*3600000;
+ const weeklyIdeal=()=>{
+  const ends=[...new Set(samples.map(s=>s.weekly_reset).filter((v):v is string=>!!v)
+   .map(v=>Date.parse(v)).filter(n=>Number.isFinite(n)))];
+  if(u?.weekly_reset)ends.push(Date.parse(u.weekly_reset));
+  return ends.filter(e=>e>start&&e-span<end).map(e=>{
+   const a=Math.max(start,e-span),b=Math.min(end,e);
+   return {name:"週配額理想",type:"line",showSymbol:false,silent:true,
+    data:[[a,100-100*(a-(e-span))/span],[b,100-100*(b-(e-span))/span]],
+    lineStyle:{color:palette[1][1],type:"dashed",width:1,opacity:.85},tooltip:{show:false}};
+  });
+ };
  chart.setOption({
   animation:false,backgroundColor:"transparent",
   title:{text:offset===0?"今天":"昨天",left:8,top:5,textStyle:{fontSize:12,color:p.text}},
   legend:{data:palette.map(x=>x[0]),top:2,right:8,textStyle:{fontSize:10,color:p.text},itemWidth:12,itemHeight:3},
-  grid:{left:5,right:5,top:24,bottom:19},
-  xAxis:{type:"time",min:start,max:end,interval:6*3600000,axisLabel:{fontSize:9,color:p.text,formatter:(v:number)=>String(new Date(v).getHours()).padStart(2,"0")},axisLine:{show:false},splitLine:{show:true,lineStyle:{color:p.grid}},axisTick:{show:false}},
+  grid:{left:5,right:5,top:24,bottom:20},
+  xAxis:{type:"time",min:start,max:end,interval:6*3600000,
+   axisLabel:{fontSize:9,color:p.text,hideOverlap:true,
+    formatter:(v:number)=>boundaries.length===0||boundaries.every(t=>Math.abs(t-v)>4*3600000)?clockLabel(v):""},
+   axisLine:{show:false},splitLine:{show:boundaries.length===0,lineStyle:{color:p.grid}},axisTick:{show:false}},
   yAxis:{type:"value",min:0,max:100,interval:50,axisLabel:{show:false},axisLine:{show:false},splitLine:{lineStyle:{color:p.grid}}},
   tooltip:{trigger:"axis",valueFormatter:(value:unknown)=>typeof value==="number"?Math.round(value)+"% 剩餘":String(value)},
   series:[
-    {name:"5 小時理想",type:"line",data:u?.primary_confirmed?ideal(u.five_reset,5):[],showSymbol:false,silent:true,lineStyle:{color:palette[0][1],type:"dashed",width:1}},
-    {name:"每週理想",type:"line",data:ideal(u?.weekly_reset,168),showSymbol:false,silent:true,lineStyle:{color:palette[1][1],type:"dashed",width:1}},
-    {name:"5 小時",type:"line",data:actual("five_hour"),showSymbol:false,lineStyle:{color:palette[0][1],width:2},itemStyle:{color:palette[0][1]},markLine:globalMark},
-    {name:"週配額",type:"line",data:actual("weekly"),showSymbol:false,lineStyle:{color:palette[1][1],width:2},itemStyle:{color:palette[1][1]}}
+   ...windows.map(w=>({
+    name:w.estimated?"5 小時預估理想":"5 小時理想",type:"line",data:idealSegment(w,start,end),
+    showSymbol:false,silent:true,connectNulls:false,
+    lineStyle:{color:palette[0][1],type:"dashed",width:1.5,opacity:w.estimated?.65:.9},
+    tooltip:{show:false}
+   })),
+   ...weeklyIdeal(),
+   {name:"5 小時",type:"line",data:actual("five_hour"),showSymbol:false,
+    lineStyle:{color:palette[0][1],width:2},itemStyle:{color:palette[0][1]},
+    markLine:markData.length?{symbol:["none","none"],silent:true,label:{show:false},data:markData}:undefined},
+   {name:"週配額",type:"line",data:actual("weekly"),showSymbol:false,
+    lineStyle:{color:palette[1][1],width:2},itemStyle:{color:palette[1][1]},
+    markLine:globalMark?{symbol:["none","none"],silent:true,label:{show:false},data:[globalMark]}:undefined}
   ]
  },true);
 }

@@ -49,6 +49,7 @@ jobs:
               src.resize((size,size),Image.Resampling.LANCZOS).save(root/name)
           PY
       - run: npm install
+      - run: npm run test:charts
       - name: Initialize Android host
         run: |
           export NDK_HOME="$ANDROID_HOME/ndk/27.2.12479018"
@@ -65,4 +66,4 @@ jobs:
           APK=$(find src-tauri/gen/android/app/build/outputs/apk -type f -name '*.apk' | head -n 1)
           test -n "$APK"
           python3 mobile/android/check_dex_jni.py "$APK"
-          echo "Release compilation passed. Installable original-key signed APK is published by CodexCredits v2.0.5 signing workflow in ChrisTorng/android-codex-tools."
+          echo "Release compilation passed. Installable original-key signed APK is published by the versioned signing workflow in ChrisTorng/android-codex-tools."

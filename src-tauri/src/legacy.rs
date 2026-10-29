@@ -168,7 +168,8 @@ pub fn sync_native(db:&Connection)->Result<(),String>{
                 let detail=format!("{label} ({source})");
                 db.execute("INSERT INTO events(at,kind,detail)
                     SELECT ?1,?2,?3
-                    WHERE NOT EXISTS(SELECT 1 FROM events WHERE at=?1 AND kind=?2 AND detail=?3)",
+                    WHERE NOT EXISTS(SELECT 1 FROM events WHERE at=?1 AND
+                       (kind=?2 OR (?2='unexpected_reset' AND kind='global_reset')))",
                     params![at,kind,detail]).map_err(|e|e.to_string())?;
             }
         }

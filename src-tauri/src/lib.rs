@@ -184,7 +184,18 @@ async fn refresh_internal(s:&State,force_aux:bool)->Result<api::Usage,String>{
  let check_global={let last=s.last_global.lock().unwrap();force_aux||now()-*last>=21600};
  if check_global{
   match api::global_reset().await{
-   Ok(value)=>{*s.global.lock().unwrap()=Some(value);*s.last_global.lock().unwrap()=now();}
+   Ok((value,verified))=>{
+    // Backfill previously imported Android "unexpected_reset" events, too.
+    // Do not fabricate a global reset without confirmed public evidence.
+    if !verified.is_empty(){
+     let db=s.db.lock().unwrap();
+     #[cfg(target_os="android")]
+     let _=legacy::sync_native(&db);
+     let _=storage::reconcile_global_resets(&db,&verified);
+    }
+    *s.global.lock().unwrap()=Some(value);
+    *s.last_global.lock().unwrap()=now();
+   }
    Err(_)=>{*s.last_global.lock().unwrap()=now();}
   }
  }

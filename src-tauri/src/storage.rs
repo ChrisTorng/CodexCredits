@@ -71,6 +71,27 @@ pub fn history(db:&Connection)->Result<Vec<serde_json::Value>,String>{
  }))).map_err(|e|e.to_string())?;
  let mut out=Vec::new();for row in rows{out.push(row.map_err(|e|e.to_string())?);}out.reverse();Ok(out)
 }
+// Change the label of a weekly quota recovery only when a confirmed public
+// reset happened near the observed drop. Do not overwrite unrelated events.
+pub fn reconcile_global_resets(db:&Connection,verified:&[i64])->Result<usize,String>{
+ let mut stmt=db.prepare("SELECT id,at FROM events WHERE kind='unexpected_reset'").map_err(|e|e.to_string())?;
+ let rows=stmt.query_map([],|r|Ok((r.get::<_,i64>(0)?,r.get::<_,String>(1)?)))
+  .map_err(|e|e.to_string())?;
+ let mut ids=Vec::new();
+ for item in rows{
+  let (id,at)=item.map_err(|e|e.to_string())?;
+  let Some(observed)=chrono::DateTime::parse_from_rfc3339(&at).ok().map(|t|t.timestamp())else{continue};
+  // The account's polling interval delays local detection by minutes.
+  // Allow 15m preceding an announcement and at most 3h propagation lag.
+  if verified.iter().any(|reset|(-900..=10800).contains(&(observed-reset))){ids.push(id);}
+ }
+ drop(stmt);
+ for id in &ids{
+  db.execute("UPDATE events SET kind='global_reset',detail='Global Reset（公開紀錄確認 · codex-reset.com）' WHERE id=?1 AND kind='unexpected_reset'",params![id])
+   .map_err(|e|e.to_string())?;
+ }
+ Ok(ids.len())
+}
 pub fn events(db:&Connection)->Result<Vec<serde_json::Value>,String>{
  let mut stmt=db.prepare("SELECT at,kind,detail FROM events ORDER BY id DESC LIMIT 60").map_err(|e|e.to_string())?;
  let rows=stmt.query_map([],|r|Ok(serde_json::json!({"at":r.get::<_,String>(0)?,"kind":r.get::<_,String>(1)?,"detail":r.get::<_,String>(2)?})))
@@ -115,4 +136,21 @@ pub fn events(db:&Connection)->Result<Vec<serde_json::Value>,String>{
   set_meta(&db,"banked_armed",Some("credit-test")).unwrap();assert_eq!(get_meta(&db,"banked_armed"),Some("credit-test".into()));
   set_meta(&db,"banked_armed",None).unwrap();assert_eq!(get_meta(&db,"banked_armed"),None);
  }
+ #[test]fn global_reset_backfills_only_verified_nearby_events(){
+  let db=Connection::open_in_memory().unwrap();
+  db.execute_batch("CREATE TABLE events(id INTEGER PRIMARY KEY,at TEXT,kind TEXT,detail TEXT);").unwrap();
+  db.execute("INSERT INTO events(at,kind,detail) VALUES(?1,'unexpected_reset','suspect')",
+   params!["2026-10-28T06:47:00Z"]).unwrap();
+  db.execute("INSERT INTO events(at,kind,detail) VALUES(?1,'unexpected_reset','older')",
+   params!["2026-10-18T06:47:00Z"]).unwrap();
+  let verified=chrono::DateTime::parse_from_rfc3339("2026-10-28T06:35:38Z").unwrap().timestamp();
+  assert_eq!(reconcile_global_resets(&db,&[verified]).unwrap(),1);
+  let kinds:Vec<String>={
+   let mut stmt=db.prepare("SELECT kind FROM events ORDER BY id").unwrap();
+   stmt.query_map([],|r|r.get(0)).unwrap().map(Result::unwrap).collect()
+  };
+  assert_eq!(kinds,vec!["global_reset","unexpected_reset"]);
+  assert_eq!(reconcile_global_resets(&db,&[verified]).unwrap(),0);
+ }
+
 }
