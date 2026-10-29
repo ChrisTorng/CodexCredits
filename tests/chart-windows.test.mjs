@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {actualFiveHourWindows,scheduledFiveHourWindows,idealSegment,windowBoundaries,clockLabel,FIVE_HOUR_MS}
+import {actualFiveHourWindows,observedQuotaWindows,scheduledFiveHourWindows,interruptAtNextReset,idealSegment,idealQuotaSegment,windowBoundaries,readableBoundaries,clockLabel,FIVE_HOUR_MS}
  from "../src/chart-windows.ts";
 
 const iso=(t)=>new Date(t).toISOString();
@@ -46,4 +46,51 @@ test("shared boundaries are deduplicated",()=>{
  const ws=[{start:t,end:t+FIVE_HOUR_MS,estimated:false},
   {start:t+FIVE_HOUR_MS,end:t+2*FIVE_HOUR_MS,estimated:true}];
  assert.equal(windowBoundaries(ws,t,t+2*FIVE_HOUR_MS).length,3);
+});
+
+test("weekly reset interrupts previous ideal immediately, never overlaps",()=>{
+ const h=3_600_000,week=7*24*h;
+ const firstEnd=Date.parse("2026-11-02T04:00:00Z");
+ const secondEnd=Date.parse("2026-11-04T06:35:00Z");
+ const firstStart=firstEnd-week,secondStart=secondEnd-week;
+ const rows=[
+  {at:iso(firstStart+50*h),five_hour:null,five_reset:null,weekly:30,weekly_reset:iso(firstEnd)},
+  {at:iso(firstStart+51*h),five_hour:null,five_reset:null,weekly:35,weekly_reset:iso(firstEnd)},
+  {at:iso(secondStart+10*60_000),five_hour:null,five_reset:null,weekly:0,weekly_reset:iso(secondEnd)},
+  {at:iso(secondStart+20*60_000),five_hour:null,five_reset:null,weekly:5,weekly_reset:iso(secondEnd)}
+ ];
+ const windows=observedQuotaWindows(rows,"weekly",iso(secondEnd),false,secondStart+30*60_000);
+ assert.equal(windows.length,2);
+ assert.equal(windows[0].end,secondStart);
+ assert.equal(windows[1].start,secondStart);
+ assert.ok(idealQuotaSegment(windows[0],secondStart-h,secondStart+3*h,week)[1][1]>0);
+ for(let at=firstStart;at<secondStart+h;at+=h){
+  assert.ok(windows.filter(w=>w.start<=at&&at<w.end).length<=1);
+ }
+});
+test("overlapping five-hour reset predictions truncate old ideal at newer start",()=>{
+ const anchor=Date.parse("2026-10-29T02:00:00Z");
+ const first={start:anchor,end:anchor+FIVE_HOUR_MS,estimated:false};
+ const second={start:anchor+2*h,end:anchor+7*h,estimated:false};
+ const windows=interruptAtNextReset([second,first]);
+ assert.equal(windows[0].end,second.start);
+ assert.equal(idealSegment(windows[0],anchor,second.start)[1][1],60);
+ assert.equal(windows.length,2);
+});
+test("moving unconfirmed weekly reset values are not each rendered as ideals",()=>{
+ const now=Date.parse("2026-10-29T06:00:00Z");
+ const week=7*24*h;
+ const samples=Array.from({length:8},(_,i)=>({
+  at:iso(now+i*10*60_000),
+  five_hour:null,five_reset:null,weekly:0,
+  weekly_reset:iso(now+i*10*60_000+week)
+ }));
+ assert.equal(observedQuotaWindows(samples,"weekly",null,false,now+2*h).length,0);
+});
+test("labels are selected sparsely on a narrow phone history chart",()=>{
+ const start=Date.parse("2026-10-29T00:00:00Z");
+ const ticks=[1,2,3,4,5,6,7,8,9,10].map(v=>start+v*h);
+ const readable=readableBoundaries(ticks,start,start+24*h,320);
+ assert.ok(readable.length<ticks.length);
+ assert.ok(readable.every((t,i)=>i===0||t-readable[i-1]>=3*h));
 });

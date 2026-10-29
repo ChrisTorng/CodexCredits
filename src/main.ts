@@ -8,7 +8,7 @@ import {GridComponent,TooltipComponent,LegendComponent,TitleComponent,MarkLineCo
 import {CanvasRenderer} from "echarts/renderers";
 
 echarts.use([LineChart,GridComponent,TooltipComponent,LegendComponent,TitleComponent,MarkLineComponent,GraphicComponent,CanvasRenderer]);
-import {actualFiveHourWindows,scheduledFiveHourWindows,idealSegment,windowBoundaries,clockLabel,FIVE_HOUR_MS} from "./chart-windows";
+import {actualFiveHourWindows,observedQuotaWindows,scheduledFiveHourWindows,interruptAtNextReset,idealSegment,idealQuotaSegment,windowBoundaries,readableBoundaries,clockLabel,FIVE_HOUR_MS} from "./chart-windows";
 import "./style.css";
 
 type Mode="off"|"auto"|"custom";
@@ -250,40 +250,40 @@ function paintHistory(id:string,offset:number){
   return [Date.parse(s.at),current&&before&&Math.abs(Date.parse(current)-Date.parse(before))>300000?null:safeRemaining(s[key])];
  });
  const u=snapshot?.usage;
- const history=actualFiveHourWindows(samples,u?.five_reset,!!u?.primary_confirmed,now)
-  .filter(w=>w.end>start&&w.start<end);
+ const history=actualFiveHourWindows(samples,u?.five_reset,!!u?.primary_confirmed,now);
  const planned=scheduledFiveHourWindows(snapshot?.next,now,start,end,history);
- const windows=[...history,...planned].sort((a,b)=>a.start-b.start);
+ const windows=interruptAtNextReset([...history,...planned]).filter(w=>w.end>start&&w.start<end);
+ const weeklyWindows=observedQuotaWindows(samples,"weekly",u?.weekly_reset,false,now).filter(w=>w.end>start&&w.start<end);
  const boundaries=windowBoundaries(windows,start,end);
+ const labels=readableBoundaries(boundaries,start,end,chart.getWidth()-12);
+ const plotWidth=Math.max(1,chart.getWidth()-10);
+ const graphics=labels.map(t=>({
+  type:"text",silent:true,
+  left:Math.max(1,Math.min(chart.getWidth()-30,5+plotWidth*(t-start)/(end-start)-14)),
+  top:Math.max(0,chart.getHeight()-14),
+  style:{text:clockLabel(t),fill:p.text,fontSize:9}
+ }));
  const globalTime=snapshot?.global?.last_reset_at?Date.parse(snapshot.global.last_reset_at):NaN;
  const globalMark=Number.isFinite(globalTime)&&globalTime>=start&&globalTime<end?
-  {xAxis:globalTime,lineStyle:{type:"dashed",color:"#999",width:1},
-   label:{show:true,formatter:"Global "+clockLabel(globalTime),position:"insideEndBottom",color:p.text,fontSize:9}}:null;
+  {xAxis:globalTime,lineStyle:{type:"dashed",color:"#999",width:1}}:null;
  const markData=boundaries.map(t=>({
-  xAxis:t,lineStyle:{type:"solid",color:p.grid,width:1.3},
-  label:{show:true,formatter:clockLabel(t),position:"insideEndTop",color:p.text,fontSize:9}
+  xAxis:t,lineStyle:{type:"solid",color:p.grid,width:1.3}
  }));
  const palette=[["5 小時","#2f80ed"],["週配額","#e89134"]] as const;
- const span=7*24*3600000;
- const weeklyIdeal=()=>{
-  const ends=[...new Set(samples.map(s=>s.weekly_reset).filter((v):v is string=>!!v)
-   .map(v=>Date.parse(v)).filter(n=>Number.isFinite(n)))];
-  if(u?.weekly_reset)ends.push(Date.parse(u.weekly_reset));
-  return ends.filter(e=>e>start&&e-span<end).map(e=>{
-   const a=Math.max(start,e-span),b=Math.min(end,e);
-   return {name:"週配額理想",type:"line",showSymbol:false,silent:true,
-    data:[[a,100-100*(a-(e-span))/span],[b,100-100*(b-(e-span))/span]],
-    lineStyle:{color:palette[1][1],type:"dashed",width:1,opacity:.85},tooltip:{show:false}};
-  });
- };
+ const weeklyIdeal=()=>weeklyWindows.map(w=>({
+  name:"週配額理想",type:"line",showSymbol:false,silent:true,
+  data:idealQuotaSegment(w,start,end,7*24*3600000),
+  lineStyle:{color:palette[1][1],type:"dashed",width:1.2,opacity:.85},
+  tooltip:{show:false}
+ }));
  chart.setOption({
-  animation:false,backgroundColor:"transparent",
+  animation:false,backgroundColor:"transparent",graphic:graphics,
   title:{text:offset===0?"今天":"昨天",left:8,top:5,textStyle:{fontSize:12,color:p.text}},
   legend:{data:palette.map(x=>x[0]),top:2,right:8,textStyle:{fontSize:10,color:p.text},itemWidth:12,itemHeight:3},
   grid:{left:5,right:5,top:24,bottom:20},
   xAxis:{type:"time",min:start,max:end,interval:6*3600000,
-   axisLabel:{fontSize:9,color:p.text,hideOverlap:true,
-    formatter:(v:number)=>boundaries.length===0||boundaries.every(t=>Math.abs(t-v)>4*3600000)?clockLabel(v):""},
+   axisLabel:{show:boundaries.length===0,fontSize:9,color:p.text,hideOverlap:true,
+    formatter:(v:number)=>clockLabel(v)},
    axisLine:{show:false},splitLine:{show:boundaries.length===0,lineStyle:{color:p.grid}},axisTick:{show:false}},
   yAxis:{type:"value",min:0,max:100,interval:50,axisLabel:{show:false},axisLine:{show:false},splitLine:{lineStyle:{color:p.grid}}},
   tooltip:{trigger:"axis",valueFormatter:(value:unknown)=>typeof value==="number"?Math.round(value)+"% 剩餘":String(value)},
