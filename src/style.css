@@ -81,6 +81,7 @@ small{font-size:11px;color:var(--sub);line-height:1.4}
 .history-events h2{flex:0 0 20px}
 #event-list{overflow:auto;flex:1;font-size:12px;line-height:1.48;user-select:text;white-space:pre-line}
 .event-item{padding-bottom:5px;overflow-wrap:anywhere}
+.history-toggle{display:block;width:100%;min-height:32px;margin:6px 0 2px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;background:transparent;color:var(--sub);font:inherit;text-align:left;cursor:pointer}
 #page-settings>.button-row{margin-top:4px;margin-bottom:8px}
 .setting-row{display:flex;align-items:center;gap:6px;min-height:48px}
 .setting-row>label{flex:0 0 88px;color:var(--sub);font-size:13px;font-weight:700}

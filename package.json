@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite --port 1420",
     "build": "tsc --noEmit && vite build",
-    "test:charts": "node --experimental-strip-types --test tests/chart-windows.test.mjs",
+    "test:charts": "node --experimental-strip-types --test tests/chart-windows.test.mjs tests/history-feed.test.mjs",
     "tauri": "tauri"
   },
   "dependencies": {

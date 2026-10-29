@@ -39,9 +39,10 @@ export function interruptAtNextReset<T extends QuotaWindow>(windows:readonly T[]
  })).filter(w=>w.end>w.start);
 }
 
-// Do not draw an ideal line for every distinct reset_at observed in historical
-// samples: an idle 5h reset_at may slide with time. Stable repeated timestamps,
-// confirmed active windows and a positive 5h consumption provide evidence.
+// A repeated stable reset_at is NOT proof that a five-hour window started.
+// Idle API placeholders may stay unchanged for multiple samples or jump with
+// rounding. Historical five-hour windows require actual consumption; the
+// current confirmed window is separately supplied by the live snapshot.
 // The weekly reset remains fixed until natural or Global Reset, and a changed
 // reset timestamp starts a replacement window rather than an overlapping line.
 export function observedQuotaWindows(
@@ -69,8 +70,9 @@ export function observedQuotaWindows(
  // Only an active/confirmed 5h window can become the current projected anchor.
  // For weekly the server's current reset_at identifies the latest window.
  if(kind==="weekly"||confirmed)ingest(now,millis(currentReset),false,true);
- const list=groups.filter(g=>g.current||g.used||
-  (g.count>=2&&g.last-g.first>=60_000))
+ const list=groups.filter(g=>kind==="five_hour"
+  ?(g.used||g.current)
+  :(g.current||g.count>=2&&g.last-g.first>=60_000))
   .map(g=>({start:g.end-span,end:g.end,nominalStart:g.end-span,
    nominalEnd:g.end,estimated:false}));
  return interruptAtNextReset(list);

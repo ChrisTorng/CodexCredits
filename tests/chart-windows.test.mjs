@@ -94,3 +94,16 @@ test("labels are selected sparsely on a narrow phone history chart",()=>{
  assert.ok(readable.length<ticks.length);
  assert.ok(readable.every((t,i)=>i===0||t-readable[i-1]>=3*h));
 });
+
+test("two stable idle reset_at samples must not fabricate a 04:18 five-hour reset",()=>{
+ const at=Date.parse("2026-10-28T20:18:00Z");
+ const end=at+FIVE_HOUR_MS;
+ const idle=[
+  {at:iso(at+1*60_000),five_hour:0,five_reset:iso(end)},
+  {at:iso(at+10*60_000),five_hour:0,five_reset:iso(end)},
+  {at:iso(at+25*60_000),five_hour:0,five_reset:iso(end)}
+ ];
+ assert.deepEqual(actualFiveHourWindows(idle),[]);
+ const used={at:iso(at+40*60_000),five_hour:4,five_reset:iso(end)};
+ assert.equal(actualFiveHourWindows([...idle,used]).length,1);
+});

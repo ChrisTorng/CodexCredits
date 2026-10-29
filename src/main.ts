@@ -9,6 +9,7 @@ import {CanvasRenderer} from "echarts/renderers";
 
 echarts.use([LineChart,GridComponent,TooltipComponent,LegendComponent,TitleComponent,MarkLineComponent,GraphicComponent,CanvasRenderer]);
 import {actualFiveHourWindows,observedQuotaWindows,scheduledFiveHourWindows,interruptAtNextReset,idealSegment,idealQuotaSegment,windowBoundaries,readableBoundaries,clockLabel,FIVE_HOUR_MS} from "./chart-windows";
+import {buildHistoryFeed} from "./history-feed";
 import "./style.css";
 
 type Mode="off"|"auto"|"custom";
@@ -101,6 +102,8 @@ let samples:Sample[]=[];
 const chronological=(rows:Sample[]):Sample[]=>rows.filter(s=>Number.isFinite(Date.parse(s.at)))
  .sort((a,b)=>Date.parse(a.at)-Date.parse(b.at));
 let events:Event[]=[];
+let expandedHistory=false;
+let expandedSamples=false;
 let page="status";
 let theme="system";
 let notificationPermission:boolean|null=null;
@@ -375,17 +378,41 @@ function render(){
 }
 function renderEvents(){
  const box=$("event-list");box.replaceChildren();
- const latest=samples.at(-1);
- const summary=document.createElement("div");summary.className="event-item";
- summary.textContent=latest?"最近採樣 "+fdate(latest.at)+" · 5h "+percent(latest.five_hour)+" · 週 "+percent(latest.weekly):"尚無配額採樣";
+ const feed=buildHistoryFeed(samples,events,Date.now());
+ const append=(item:{at:string;kind:"event"|"sample";detail:string})=>{
+  const line=document.createElement("div");
+  line.className="event-item";
+  line.textContent=fdate(item.at)+" · "+item.detail;
+  box.append(line);
+ };
+ const summary=document.createElement("div");
+ summary.className="event-item";
+ summary.textContent=feed.latest?
+  "最近採樣 "+fdate(feed.latest.at)+" · 5h "+percent(feed.latest.five_hour)+" · 週 "+percent(feed.latest.weekly):
+  "尚無配額採樣";
  box.append(summary);
- for(const e of events.slice(0,6)){
-  const item=document.createElement("div");item.className="event-item";
-  item.textContent=fdate(e.at)+" · "+e.detail;box.append(item);
+ for(const item of feed.recent)append(item);
+ if(!feed.recent.length){
+  const note=document.createElement("div");note.className="event-item";
+  note.textContent="近 48 小時沒有重大事件或明顯配額變化";
+  box.append(note);
  }
- for(const sample of samples.slice(-8).reverse()){
-  const item=document.createElement("div");item.className="event-item";
-  item.textContent=fdate(sample.at)+" · 5h "+percent(sample.five_hour)+" · 週 "+percent(sample.weekly);box.append(item);
+ const toggle=(label:string,active:boolean,callback:()=>void)=>{
+  const button=document.createElement("button");
+  button.type="button";button.className="history-toggle";
+  button.textContent=(active?"收起":"顯示")+label;
+  button.onclick=()=>{
+   const scroll=box.scrollTop;callback();renderEvents();box.scrollTop=scroll;
+  };
+  box.append(button);
+ };
+ if(feed.archive.length){
+  toggle("較早事件／變化（"+feed.archive.length+"）",expandedHistory,()=>expandedHistory=!expandedHistory);
+  if(expandedHistory)for(const item of feed.archive.slice(0,100))append(item);
+ }
+ if(feed.details.length){
+  toggle("採樣明細（"+feed.details.length+"）",expandedSamples,()=>expandedSamples=!expandedSamples);
+  if(expandedSamples)for(const item of feed.details.slice(0,100))append(item);
  }
 }
 async function load(){
