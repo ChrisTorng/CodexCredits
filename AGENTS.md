@@ -14,7 +14,7 @@ These instructions apply to CodexCredits, including Android builds and release d
 
 1. Produce the APK from the intended CodexCredits commit with the original, upgrade-compatible Android signing identity. Confirm that the matching signed-release Actions run succeeded and verified package ID, versionCode, signing certificate and JNI methods.
 2. Verify actual APK byte size, ZIP package structure and SHA-256 against the release asset; do not confuse a signed APK with the Actions ZIP artifact.
-3. **The default Android download must take one tap.** Do not require ChatGPT Library, locating a folder, an external browser, a GitHub Actions login, or extracting a ZIP.
+3. **Prioritize the delivery path the user has actually tested.** On 2026-10-29 the user confirmed successfully downloading and installing the Android APK by opening the successful signed GitHub Actions run page and selecting its download link. Provide the exact successful signed Actions run URL for each new version first. Do not send the user through ChatGPT Library or manual ZIP extraction as the normal installation workflow. A genuine one-tap direct APK link is welcome as an additional option only after its behavior is confirmed on their phone.
 4. Direct-download endpoint (not GitHub Releases asset redirect):
 
    https://raw.githubusercontent.com/ChrisTorng/android-codex-tools/apk-download/CodexCredits-Android.apk
@@ -28,7 +28,7 @@ These instructions apply to CodexCredits, including Android builds and release d
 
 ### User-facing download links
 
-- One-tap APK: https://raw.githubusercontent.com/ChrisTorng/android-codex-tools/apk-download/CodexCredits-Android.apk (only after verifying the expected mirror version).
+- Primary verified delivery: link directly to the successful version-specific signed GitHub Actions run, not merely the workflow list; the user confirmed this workflow page method worked.\n- Optional one-tap raw APK: https://raw.githubusercontent.com/ChrisTorng/android-codex-tools/apk-download/CodexCredits-Android.apk (only after verifying the expected mirror version; mobile behavior has not yet been confirmed).
 - Optional freshly registered ChatGPT APK attachment when it is retrievable.
 - Release history: https://github.com/ChrisTorng/android-codex-tools/releases
 ## Android upgrade compatibility
@@ -41,4 +41,4 @@ These instructions apply to CodexCredits, including Android builds and release d
 
 ## Release response checklist
 
-Signed workflow success, original signing identity and version checks, verified APK SHA-256 and size, matching direct mirror version and Git blob; one-tap direct APK link without Library or ZIP extraction. Recognize implicit successful installation from subsequent user testing, but do not claim an untested new hosting endpoint has been proven on the user's phone.
+Signed workflow success, original signing identity and version checks, verified APK SHA-256 and size, matching direct mirror version and Git blob; signed version-specific Actions run link without ChatGPT Library or ZIP extraction; add the verified raw mirror as optional. Recognize implicit successful installation from subsequent user testing, but do not claim an untested new hosting endpoint has been proven on the user's phone.
