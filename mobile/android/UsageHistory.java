@@ -306,7 +306,7 @@ final class UsageHistory {
                 // Permit slight announcement lag and bounded propagation time.
                 if(delay>=-15L*60_000L && delay<=3L*60*60_000L &&
                         Math.abs(delay)<bestDiff){
-                    bestDiff=diff;
+                    bestDiff=Math.abs(delay);
                     best=new Event(at,"global_reset",
                             "Global Reset（公開紀錄確認）",
                             "codex-reset.com");
