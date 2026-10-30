@@ -18,14 +18,14 @@ fn glyph(data:&mut [u8],left:usize,top:usize,pattern:[u8;5]){
 }
 fn row(data:&mut [u8],y:usize,used:Option<f64>,reset:Option<&str>,window_seconds:i64,color:[u8;4],now:i64){
  let remaining=used.map(|v|(100.-v).clamp(0.,100.));
- rect(data,7,y,24,9,[52,59,70,255]);
+ rect(data,10,y,21,9,[52,59,70,255]);
  if let Some(p)=remaining{
-  rect(data,7,y,((p/100.*24.).round() as usize).min(24),9,color);
+  rect(data,10,y,((p/100.*21.).round() as usize).min(21),9,color);
  }
  let end=reset.and_then(|s|chrono::DateTime::parse_from_rfc3339(s).ok()).map(|d|d.timestamp());
  if let Some(end)=end.filter(|e|*e>now&&*e<=now+window_seconds){
   let elapsed=(now-(end-window_seconds)).clamp(0,window_seconds);
-  let x=7+(elapsed*23/window_seconds) as usize;
+  let x=10+(elapsed*20/window_seconds) as usize;
   rect(data,x,y,2,9,[250,250,250,255]);
  }
 }
@@ -33,8 +33,10 @@ pub fn icon(usage:Option<&Usage>,now:i64)->Image<'static>{
  let mut data=vec![0u8;WIDTH*WIDTH*4];
  rect(&mut data,0,0,WIDTH,WIDTH,[29,35,45,255]);
  rect(&mut data,1,1,30,30,[17,23,33,255]);
- glyph(&mut data,2,7,[7,4,7,1,7]); // 5
- glyph(&mut data,2,20,[5,5,7,7,5]); // W (stylised)
+ glyph(&mut data,1,7,[7,4,7,1,7]); // 5
+ glyph(&mut data,5,7,[5,5,7,5,5]); // H
+ glyph(&mut data,1,20,[2,6,2,2,7]); // 1
+ glyph(&mut data,5,20,[5,5,7,7,5]); // W
  row(&mut data,5,usage.and_then(|v|v.five_hour),usage.and_then(|v|v.five_reset.as_deref()),5*3600,[39,128,237,255],now);
  row(&mut data,18,usage.and_then(|v|v.weekly),usage.and_then(|v|v.weekly_reset.as_deref()),7*86400,[228,143,49,255],now);
  Image::new_owned(data,WIDTH as u32,WIDTH as u32)
