@@ -21,6 +21,11 @@ jobs:
       - run: npm install
       - run: npm run build
       - run: npm run test:charts
+      - name: Generate high-DPI Windows icon from the same artwork used on Android
+        shell: pwsh
+        run: |
+          python -m pip install --quiet Pillow
+          python scripts/prepare_windows_icon.py
       - name: Check shared branding and package IDs
         run: python mobile/android/check_branding.py
       - run: cargo test --manifest-path src-tauri/Cargo.toml

@@ -480,7 +480,14 @@ pub fn run(){
   let show=MenuItem::with_id(app,"show","顯示 Codex Credits",true,None::<&str>)?;
   let quit=MenuItem::with_id(app,"quit","結束並停止監測",true,None::<&str>)?;
   let menu=Menu::with_items(app,&[&show,&quit])?;
-  let icon=tauri::image::Image::new_owned(vec![46_u8,122,222,255].repeat(256),16,16);
+  // Match the Android launcher image and the Windows executable/taskbar icon.
+  // The previous 16px blue placeholder was unrelated to the app icon.
+  let icon=app.default_window_icon()
+   .ok_or_else(||std::io::Error::other("Bundled Codex Credits icon is missing"))?
+   .clone();
+  if let Some(window)=app.get_webview_window("main"){
+   window.set_icon(icon.clone())?;
+  }
   TrayIconBuilder::new().icon(icon).menu(&menu)
    .on_menu_event(|app,event|match event.id.as_ref(){
      "show"=>{if let Some(w)=app.get_webview_window("main"){let _=w.show();let _=w.set_focus();}},
