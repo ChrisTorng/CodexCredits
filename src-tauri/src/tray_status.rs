@@ -13,7 +13,7 @@ fn rect(data:&mut [u8],x:usize,y:usize,w:usize,h:usize,color:[u8;4]){
 }
 fn glyph(data:&mut [u8],left:usize,top:usize,pattern:[u8;5]){
  for (y,row) in pattern.iter().enumerate(){for x in 0..3{
-  if (row & (1<<(2-x)))!=0 {pixel(data,left+x,top+y,[240,243,248,255]);}
+  if (*row & (1u8<<(2-x)))!=0 {pixel(data,left+x,top+y,[240,243,248,255]);}
  }}
 }
 fn row(data:&mut [u8],y:usize,used:Option<f64>,reset:Option<&str>,window_seconds:i64,color:[u8;4],now:i64){
