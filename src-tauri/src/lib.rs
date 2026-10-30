@@ -203,7 +203,8 @@ async fn refresh_internal(s:&State,force_aux:bool)->Result<api::Usage,String>{
  }
  #[cfg(desktop)]
  tray_status::refresh(&s.app,Some(&value));
- if let Some(credits)=s.credits.lock().unwrap().clone(){
+ let credits_snapshot={s.credits.lock().unwrap().clone()};
+ if let Some(credits)=credits_snapshot{
   remind_expiring_banked(s,&credits).await;
  }
  Ok(value)
