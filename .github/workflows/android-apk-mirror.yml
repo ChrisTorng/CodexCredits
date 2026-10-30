@@ -5,9 +5,13 @@ on:
     branches: [main]
     paths: ['.github/workflows/android-apk-mirror.yml']
   workflow_dispatch:
+  workflow_run:
+    workflows: ['Android Signed Release']
+    types: [completed]
 
 permissions:
   contents: write
+  actions: read
 
 concurrency:
   group: codexcredits-direct-android-apk
@@ -15,34 +19,34 @@ concurrency:
 
 jobs:
   mirror:
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 1
 
-      - name: Download verified v2.0.12 signed APK
+      - name: Download signed v2.0.12 APK from this repository
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_ID: ${{ github.event.workflow_run.id || '41057160230' }}
         run: |
           set -euo pipefail
-          TAG=codexcredits-android-v2.0.12-release
-          SOURCE=ChrisTorng/android-codex-tools
-          NAME=CodexCredits-Android-v2.0.12-arm64.apk
+          test "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" --jq '.name')" = "Android Signed Release"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" --jq '.head_branch')" = "main"
+          test "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" --jq '.conclusion')" = "success"
           mkdir -p "$RUNNER_TEMP/android-apk"
-          gh release download "$TAG" -R "$SOURCE" --pattern "$NAME" --dir "$RUNNER_TEMP/android-apk"
-          APK="$RUNNER_TEMP/android-apk/$NAME"
-          test -s "$APK"
-          EXPECTED=$(gh api "repos/$SOURCE/releases/tags/$TAG" |
-            jq -r --arg name "$NAME" '.assets[] | select(.name == $name) | .digest')
-          ACTUAL="sha256:$(sha256sum "$APK" | cut -d' ' -f1)"
-          test "$EXPECTED" = "$ACTUAL" || { echo "::error::APK SHA-256 digest mismatch"; exit 1; }
-          unzip -tq "$APK"
-          test "$ACTUAL" = "sha256:a7b9c458be8e0d5a15e9c7b2efdc96634481fe43a85a8a796b3e6afcc7a1aeaa"
-          test "$(wc -c < "$APK")" -eq 10259111
-          cp "$APK" "$RUNNER_TEMP/CodexCredits-Android.apk"
-          printf 'version=2.0.12\ntag=%s\nsource_commit=fc66e7767055b1fadc47644a58d43b7f151dcdf4\n%s\n' "$TAG" "$ACTUAL" > "$RUNNER_TEMP/VERSION.txt"
-          echo "Verified: $NAME $(wc -c < "$APK") bytes $ACTUAL"
+          gh run download "$RUN_ID" -R "$GITHUB_REPOSITORY" \
+            --name CodexCredits-Android-v2.0.12-Signed-Release \
+            --dir "$RUNNER_TEMP/android-apk"
+          cd "$RUNNER_TEMP/android-apk"
+          sha256sum --check SHA256SUMS.txt
+          test -s CodexCredits-Android-v2.0.12-arm64.apk
+          unzip -tq CodexCredits-Android-v2.0.12-arm64.apk
+          cp CodexCredits-Android-v2.0.12-arm64.apk "$RUNNER_TEMP/CodexCredits-Android.apk"
+          ACTUAL="sha256:$(sha256sum CodexCredits-Android-v2.0.12-arm64.apk | cut -d' ' -f1)"
+          printf 'version=2.0.12\nsource_repo=%s\nsource_run=%s\n%s\n' "$GITHUB_REPOSITORY" "$RUN_ID" "$ACTUAL" > "$RUNNER_TEMP/VERSION.txt"
+          echo "Verified signed APK from $GITHUB_REPOSITORY run $RUN_ID: $ACTUAL"
 
       - name: Publish static one-tap download from CodexCredits
         run: |
@@ -60,9 +64,9 @@ jobs:
           cp "$RUNNER_TEMP/VERSION.txt" VERSION.txt
           git add CodexCredits-Android.apk VERSION.txt
           if git diff --cached --quiet; then
-            echo "Already up to date"
+            echo "Direct-download APK already up to date"
           else
-            git commit -m 'release(android): mirror verified signed Codex Credits v2.0.12 APK'
+            git commit -m 'release(android): mirror independently signed CodexCredits v2.0.12 APK'
             git push origin HEAD:apk-download
           fi
-          echo "Direct APK: https://raw.githubusercontent.com/ChrisTorng/CodexCredits/apk-download/CodexCredits-Android.apk"
+          echo 'Direct APK: https://raw.githubusercontent.com/ChrisTorng/CodexCredits/apk-download/CodexCredits-Android.apk'
