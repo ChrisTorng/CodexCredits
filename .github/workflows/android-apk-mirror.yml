@@ -33,6 +33,12 @@ jobs:
             RUN_ID=$(gh run list -R "$GITHUB_REPOSITORY" --workflow android-signed.yml --branch main --status success --limit 1 --json databaseId --jq '.[0].databaseId')
           fi
           test -n "$RUN_ID"
+          MAIN_SHA=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')
+          SIGNED_SHA=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" --jq '.head_sha')
+          if [ "$SIGNED_SHA" != "$MAIN_SHA" ]; then
+            echo "Superseded signed run $RUN_ID, skipping old APK to avoid overwriting a newer release."
+            exit 0
+          fi
           test "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" --jq '.name')" = "Android Signed Release"
           test "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" --jq '.head_branch')" = "main"
           test "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" --jq '.conclusion')" = "success"
