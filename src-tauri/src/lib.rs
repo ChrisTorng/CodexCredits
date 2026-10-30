@@ -203,12 +203,16 @@ async fn refresh_internal(s:&State,force_aux:bool)->Result<api::Usage,String>{
  }
  #[cfg(desktop)]
  tray_status::refresh(&s.app,Some(&value));
- let credits_snapshot={s.credits.lock().unwrap().clone()};
- if let Some(credits)=credits_snapshot{
-  remind_expiring_banked(s,&credits).await;
+ #[cfg(not(target_os="android"))]
+ {
+  let credits_snapshot={s.credits.lock().unwrap().clone()};
+  if let Some(credits)=credits_snapshot{
+   remind_expiring_banked(s,&credits).await;
+  }
  }
  Ok(value)
 }
+#[cfg(not(target_os="android"))]
 async fn remind_expiring_banked(s:&State,credits:&api::Credits){
  let Some((credit,remaining))=banked_reminder::nearest(credits,now())else{return};
  let Some((stage,description))=banked_reminder::stage(remaining)else{return};
