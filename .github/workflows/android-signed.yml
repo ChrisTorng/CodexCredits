@@ -2,7 +2,12 @@ name: Android Signed Release
 on:
   push:
     branches: [main]
-    paths: ['.github/workflows/android-signed.yml']
+    paths:
+      - 'src/**'
+      - 'src-tauri/**'
+      - 'mobile/**'
+      - 'package.json'
+      - '.github/workflows/android-signed.yml'
   workflow_dispatch:
 permissions:
   contents: read
@@ -77,16 +82,16 @@ jobs:
           python3 mobile/android/check_dex_jni.py "$APK"
           AAPT="$ANDROID_HOME/build-tools/35.0.0/aapt"
           SIGNER="$ANDROID_HOME/build-tools/35.0.0/apksigner"
-          "$AAPT" dump badging "$APK" | grep -F "package: name='com.christorng.androidcodextools'" | grep -F "versionCode='2000012'"
+          "$AAPT" dump badging "$APK" | grep -F "package: name='com.christorng.androidcodextools'" | grep -F "versionCode='2000013'"
           "$AAPT" dump badging "$APK" | grep -F "application-label:'Codex Credits'"
           "$SIGNER" verify --print-certs "$APK" |
             grep -qi 'Signer #1 certificate SHA-256 digest: 177f5e3fed59854e4203dafe13490a75c2438b37731ff0e7af7acbfe45a8e679'
           mkdir -p signed
-          cp "$APK" signed/CodexCredits-Android-v2.0.12-arm64.apk
+          cp "$APK" signed/CodexCredits-Android-v2.0.13-arm64.apk
           stat -c '%n %s bytes' signed/*.apk
           sha256sum signed/*.apk | tee signed/SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: CodexCredits-Android-v2.0.12-Signed-Release
+          name: CodexCredits-Android-v2.0.13-Signed-Release
           path: signed/
           if-no-files-found: error

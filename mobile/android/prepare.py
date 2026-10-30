@@ -28,7 +28,7 @@ for name in names:
     text=source.read_text(encoding="utf-8")
     text=text.replace("Codex Tools","Codex Credits").replace(
         "Codex-Tools/0.1 (+https://github.com/ChrisTorng/android-codex-tools)",
-        "CodexCredits/2.0.12 (+https://github.com/ChrisTorng/CodexCredits)")
+        "CodexCredits/2.0.13 (+https://github.com/ChrisTorng/CodexCredits)")
     (out/(name+".java")).write_text(text,encoding="utf-8")
 (out/"LegacyBridge.java").write_bytes(Path("mobile/android/LegacyBridge.java").read_bytes())
 # Required: Rust resolves LegacyBridge methods by exact JNI names at runtime.

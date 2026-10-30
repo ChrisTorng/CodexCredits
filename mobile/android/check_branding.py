@@ -11,8 +11,8 @@ assert android["productName"]=="Codex Credits"
 assert android["identifier"]=="com.christorng.androidcodextools"
 assert windows["identifier"]=="com.christorng.codexcredits"
 assert windows["productName"]=="CodexCredits"
-assert android["version"]==windows["version"]=="2.0.12"
-assert android["bundle"]["android"]["versionCode"]==2000012
+assert android["version"]==windows["version"]=="2.0.13"
+assert android["bundle"]["android"]["versionCode"]==2000013
 assert windows["app"]["windows"][0]["title"]=="Codex Credits"
 assert windows["bundle"]["windows"]["nsis"]["installerHooks"]=="nsis/install-hooks.nsh"
 hooks=read("src-tauri/nsis/install-hooks.nsh")

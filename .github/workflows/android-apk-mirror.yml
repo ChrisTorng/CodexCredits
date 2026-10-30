@@ -26,30 +26,34 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Download signed v2.0.12 APK from this repository
+      - name: Download signed v2.0.13 APK from this repository
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RUN_ID: ${{ github.event.workflow_run.id || '41057160230' }}
+          RUN_ID: ${{ github.event.workflow_run.id || '' }}
         run: |
           set -euo pipefail
+          if [ -z "$RUN_ID" ]; then
+            RUN_ID=$(gh run list -R "$GITHUB_REPOSITORY" --workflow android-signed.yml --branch main --status success --limit 1 --json databaseId --jq '.[0].databaseId')
+          fi
+          test -n "$RUN_ID"
           test "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" --jq '.name')" = "Android Signed Release"
           test "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" --jq '.head_branch')" = "main"
           test "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" --jq '.conclusion')" = "success"
           mkdir -p "$RUNNER_TEMP/android-apk"
           gh run download "$RUN_ID" -R "$GITHUB_REPOSITORY" \
-            --name CodexCredits-Android-v2.0.12-Signed-Release \
+            --name CodexCredits-Android-v2.0.13-Signed-Release \
             --dir "$RUNNER_TEMP/android-apk"
           cd "$RUNNER_TEMP/android-apk"
           EXPECTED=$(awk 'NR==1 {print $1}' SHA256SUMS.txt)
-          grep -Fq 'signed/CodexCredits-Android-v2.0.12-arm64.apk' SHA256SUMS.txt
+          grep -Fq 'signed/CodexCredits-Android-v2.0.13-arm64.apk' SHA256SUMS.txt
           test "${#EXPECTED}" -eq 64
-          ACTUAL_SUM=$(sha256sum CodexCredits-Android-v2.0.12-arm64.apk | cut -d' ' -f1)
+          ACTUAL_SUM=$(sha256sum CodexCredits-Android-v2.0.13-arm64.apk | cut -d' ' -f1)
           test "$ACTUAL_SUM" = "$EXPECTED" || { echo "::error::Downloaded APK SHA-256 mismatch"; exit 1; }
-          test -s CodexCredits-Android-v2.0.12-arm64.apk
-          unzip -tq CodexCredits-Android-v2.0.12-arm64.apk
-          cp CodexCredits-Android-v2.0.12-arm64.apk "$RUNNER_TEMP/CodexCredits-Android.apk"
-          ACTUAL="sha256:$(sha256sum CodexCredits-Android-v2.0.12-arm64.apk | cut -d' ' -f1)"
-          printf 'version=2.0.12\nsource_repo=%s\nsource_run=%s\n%s\n' "$GITHUB_REPOSITORY" "$RUN_ID" "$ACTUAL" > "$RUNNER_TEMP/VERSION.txt"
+          test -s CodexCredits-Android-v2.0.13-arm64.apk
+          unzip -tq CodexCredits-Android-v2.0.13-arm64.apk
+          cp CodexCredits-Android-v2.0.13-arm64.apk "$RUNNER_TEMP/CodexCredits-Android.apk"
+          ACTUAL="sha256:$(sha256sum CodexCredits-Android-v2.0.13-arm64.apk | cut -d' ' -f1)"
+          printf 'version=2.0.13\nsource_repo=%s\nsource_run=%s\n%s\n' "$GITHUB_REPOSITORY" "$RUN_ID" "$ACTUAL" > "$RUNNER_TEMP/VERSION.txt"
           echo "Verified signed APK from $GITHUB_REPOSITORY run $RUN_ID: $ACTUAL"
 
       - name: Publish static one-tap download from CodexCredits
@@ -70,7 +74,7 @@ jobs:
           if git diff --cached --quiet; then
             echo "Direct-download APK already up to date"
           else
-            git commit -m 'release(android): mirror independently signed CodexCredits v2.0.12 APK'
+            git commit -m 'release(android): mirror independently signed CodexCredits v2.0.13 APK'
             git push origin HEAD:apk-download
           fi
           echo 'Direct APK: https://raw.githubusercontent.com/ChrisTorng/CodexCredits/apk-download/CodexCredits-Android.apk'
