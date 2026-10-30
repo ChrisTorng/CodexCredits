@@ -1,0 +1,4 @@
+version=2.0.12
+tag=codexcredits-android-v2.0.12-release
+source_commit=fc66e7767055b1fadc47644a58d43b7f151dcdf4
+sha256:a7b9c458be8e0d5a15e9c7b2efdc96634481fe43a85a8a796b3e6afcc7a1aeaa
