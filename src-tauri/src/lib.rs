@@ -4,6 +4,7 @@ mod storage;
 mod credentials;
 mod oauth;
 mod engine;
+#[cfg(desktop)] mod tray_status;
 #[cfg(target_os="android")] mod android_bridge;
 #[cfg(target_os="android")] mod legacy;
 
@@ -11,8 +12,8 @@ use std::{sync::{Arc,Mutex},time::Duration};
 use serde::Serialize;
 use tauri_plugin_notification::NotificationExt;
 use tauri::{AppHandle,Emitter,Manager,WindowEvent};
-#[cfg(desktop)] use tauri::menu::{Menu,MenuItem};
-#[cfg(desktop)] use tauri::tray::TrayIconBuilder;
+#[cfg(desktop)] use tauri::menu::{Menu,MenuItem,PredefinedMenuItem};
+#[cfg(desktop)] use tauri::tray::{TrayIconBuilder,TrayIconEvent,MouseButton};
 
 struct State{
  app:AppHandle,
@@ -199,6 +200,8 @@ async fn refresh_internal(s:&State,force_aux:bool)->Result<api::Usage,String>{
    Err(_)=>{*s.last_global.lock().unwrap()=now();}
   }
  }
+ #[cfg(desktop)]
+ tray_status::refresh(&s.app,Some(&value));
  Ok(value)
 }
 async fn notify(s:&State,title:&str,message:&str){
@@ -477,9 +480,10 @@ pub fn run(){
   app.manage(state.clone());
   #[cfg(desktop)]
   {
-  let show=MenuItem::with_id(app,"show","顯示 Codex Credits",true,None::<&str>)?;
+  let show=MenuItem::with_id(app,"show","開啟 Credit Codex",true,None::<&str>)?;
   let quit=MenuItem::with_id(app,"quit","結束並停止監測",true,None::<&str>)?;
-  let menu=Menu::with_items(app,&[&show,&quit])?;
+  let separator=PredefinedMenuItem::separator(app)?;
+  let menu=Menu::with_items(app,&[&show,&separator,&quit])?;
   // Match the Android launcher image and the Windows executable/taskbar icon.
   // The previous 16px blue placeholder was unrelated to the app icon.
   let icon=app.default_window_icon()
@@ -488,7 +492,14 @@ pub fn run(){
   if let Some(window)=app.get_webview_window("main"){
    window.set_icon(icon.clone())?;
   }
-  TrayIconBuilder::new().icon(icon).menu(&menu)
+  TrayIconBuilder::with_id("quota").icon(tray_status::icon(None,now())).tooltip("Codex Credits · 正在取得配額").show_menu_on_left_click(false).menu(&menu)
+   .on_tray_icon_event(|tray,event|{
+     if let TrayIconEvent::DoubleClick{button:MouseButton::Left,..}=event{
+       if let Some(window)=tray.app_handle().get_webview_window("main"){
+         let _=window.show();let _=window.unminimize();let _=window.set_focus();
+       }
+     }
+   })
    .on_menu_event(|app,event|match event.id.as_ref(){
      "show"=>{if let Some(w)=app.get_webview_window("main"){let _=w.show();let _=w.set_focus();}},
      "quit"=>app.exit(0),_=>{}
@@ -507,6 +518,11 @@ pub fn run(){
    let mut last_sample=now();
    loop{
     tokio::time::sleep(Duration::from_secs(2)).await;
+    #[cfg(desktop)]
+    if now()%60<2{
+      let usage=state.usage.lock().unwrap().clone();
+      tray_status::refresh(&handle,usage.as_ref());
+    }
     let interval=state.settings.lock().unwrap().sampling_minutes.clamp(10,60) as i64*60;
     if now()-last_sample>=interval{
      last_sample=now();
