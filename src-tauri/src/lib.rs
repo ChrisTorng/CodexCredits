@@ -4,6 +4,7 @@ mod storage;
 mod credentials;
 mod oauth;
 mod engine;
+mod banked_reminder;
 #[cfg(desktop)] mod tray_status;
 #[cfg(target_os="android")] mod android_bridge;
 #[cfg(target_os="android")] mod legacy;
@@ -202,7 +203,33 @@ async fn refresh_internal(s:&State,force_aux:bool)->Result<api::Usage,String>{
  }
  #[cfg(desktop)]
  tray_status::refresh(&s.app,Some(&value));
+ if let Some(credits)=s.credits.lock().unwrap().clone(){
+  remind_expiring_banked(s,&credits).await;
+ }
  Ok(value)
+}
+async fn remind_expiring_banked(s:&State,credits:&api::Credits){
+ let Some((credit,remaining))=banked_reminder::nearest(credits,now())else{return};
+ let Some((stage,description))=banked_reminder::stage(remaining)else{return};
+ let settings=s.settings.lock().unwrap().clone();
+ if !settings.native_notify_enabled&&settings.ntfy_topic.is_empty(){return;}
+ // Do not persist the server-side credit ID in event logs.
+ use sha2::{Digest,Sha256};
+ let hash=Sha256::digest(credit.id.as_bytes());
+ let suffix=hash[..8].iter().map(|b|format!("{b:02x}")).collect::<String>();
+ let key=format!("banked_reminder_{suffix}");
+ let already={
+  let db=s.db.lock().unwrap();
+  storage::get_meta(&db,&key).and_then(|s|s.parse::<u8>().ok()).unwrap_or(0)
+ };
+ if already>=stage{return;}
+ // Commit first so a crash, restart, Android resume or repeated refresh
+ // cannot deliver duplicate reminder notifications for this milestone.
+ if storage::set_meta(&s.db.lock().unwrap(),&key,Some(&stage.to_string())).is_err(){return;}
+ record(s,"banked_reminder",&format!("Banked Reset {description} · 到期 {}",
+  credit.expires_at));
+ notify(s,"Banked Reset 即將到期",&format!("{description} · 到期 {}",
+  credit.expires_at)).await;
 }
 async fn notify(s:&State,title:&str,message:&str){
  let settings=s.settings.lock().unwrap().clone();
