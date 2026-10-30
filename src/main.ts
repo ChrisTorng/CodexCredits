@@ -10,6 +10,7 @@ import {CanvasRenderer} from "echarts/renderers";
 echarts.use([LineChart,GridComponent,TooltipComponent,LegendComponent,TitleComponent,MarkLineComponent,GraphicComponent,CanvasRenderer]);
 import {actualFiveHourWindows,observedQuotaWindows,scheduledFiveHourWindows,interruptAtNextReset,idealSegment,idealQuotaSegment,windowBoundaries,readableBoundaries,clockLabel,FIVE_HOUR_MS} from "./chart-windows";
 import {buildHistoryFeed} from "./history-feed";
+import {nearestCredit,bankedCountdown,timelineTicks,historyFallbackTicks} from "./credit-ui";
 import "./style.css";
 
 type Mode="off"|"auto"|"custom";
@@ -214,6 +215,14 @@ function paintQuota(id:string,used:number|null|undefined,reset:string|null|undef
  const ideal=valid?[[start,100],[until,0]]:[];
  const now=Date.now();
  const inWindow=valid&&now>=start&&now<=until;
+ const ticks=valid?timelineTicks(start,until,weekly):[];
+ const tickLabels=ticks.map(t=>({
+  type:"text",silent:true,bottom:0,
+  left:Math.max(3,Math.min(chart.getWidth()-38,5+(chart.getWidth()-10)*(t-start)/span-(weekly?14:9))),
+  style:{text:weekly?new Date(t).toLocaleDateString("zh-TW",{month:"numeric",day:"numeric"}):
+    new Date(t).toLocaleTimeString("zh-TW",{hour:"2-digit",minute:"2-digit",hour12:false}),
+   fill:p.text,fontSize:9}
+ }));
  const boundary=(time:number,right:boolean)=>({
   type:"text",bottom:0,...(right?{right:0}:{left:0}),
   silent:true,style:{text:clockLabel(time,true),fill:p.text,fontSize:10}
@@ -230,9 +239,9 @@ function paintQuota(id:string,used:number|null|undefined,reset:string|null|undef
    {name:"實際剩餘",type:"line",data:valid?actual:[],showSymbol:false,lineStyle:{width:2.4,color},itemStyle:{color},areaStyle:{color,opacity:.18},
     markLine:valid?{symbol:["none","none"],silent:true,label:{show:false},
       lineStyle:{color:p.grid,width:1,type:"solid"},
-      data:[{xAxis:start},{xAxis:until},...(inWindow?[{xAxis:now,lineStyle:{color:p.text,type:"dashed",width:1}}]:[])]}:undefined}
+      data:[{xAxis:start},{xAxis:until},...ticks.map(t=>({xAxis:t})),...(inWindow?[{xAxis:now,lineStyle:{color:p.text,type:"dashed",width:1}}]:[])]}:undefined}
   ],
-  graphic:valid?[boundary(start,false),boundary(until,true)]:[{
+  graphic:valid?[boundary(start,false),...tickLabels,boundary(until,true)]:[{
    type:"text",left:10,top:"45%",style:{text:
     !snapshot?.signed_in?"請先登入":
     !snapshot?.usage?.checked_at?"正在取得最新配額…":
@@ -258,7 +267,8 @@ function paintHistory(id:string,offset:number){
  const windows=interruptAtNextReset([...history,...planned]).filter(w=>w.end>start&&w.start<end);
  const weeklyWindows=observedQuotaWindows(samples,"weekly",u?.weekly_reset,false,now).filter(w=>w.end>start&&w.start<end);
  const boundaries=windowBoundaries(windows,start,end);
- const labels=readableBoundaries(boundaries,start,end,chart.getWidth()-12);
+ const fallback=historyFallbackTicks(start,end).filter(t=>!boundaries.some(b=>Math.abs(b-t)<15*60000));
+ const labels=readableBoundaries([...boundaries,...fallback].sort((a,b)=>a-b),start,end,chart.getWidth()-12);
  const plotWidth=Math.max(1,chart.getWidth()-10);
  const graphics=labels.map(t=>({
   type:"text",silent:true,
@@ -269,7 +279,7 @@ function paintHistory(id:string,offset:number){
  const globalTime=snapshot?.global?.last_reset_at?Date.parse(snapshot.global.last_reset_at):NaN;
  const globalMark=Number.isFinite(globalTime)&&globalTime>=start&&globalTime<end?
   {xAxis:globalTime,lineStyle:{type:"dashed",color:"#999",width:1}}:null;
- const markData=boundaries.map(t=>({
+ const markData=[...boundaries,...fallback].map(t=>({
   xAxis:t,lineStyle:{type:"solid",color:p.grid,width:1.3}
  }));
  const palette=[["5 小時","#2f80ed"],["週配額","#e89134"]] as const;
@@ -341,9 +351,10 @@ function render(){
  $("reset-title").textContent="Banked Reset ×"+available+(s.armed?" · 待命":"");
  $("reset-action").textContent="Banked Reset ×"+available+(s.armed?" · 待命":"");
  ($("reset-action") as HTMLButtonElement).hidden=available<=0&&!s.armed;
- const first=credits?.available[0];
- const expiries=(credits?.available??[]).map(x=>x.expires_at).filter(Boolean).map(x=>fdate(x)).join(" · ");
- $("reset-expiry").textContent=(s.armed?"用盡後自動重置":"")+(expiries?(s.armed?" · ":"")+"到期 "+expiries:"");
+ const first=nearestCredit(credits?.available??[]);
+ const expiry=first?.expires_at;
+ $("reset-expiry").textContent=(s.armed?"用盡後自動重置 · ":"")+
+  (expiry?"最近到期 "+fdate(expiry)+" · 剩 "+bankedCountdown(expiry):"目前沒有有效的 Banked Reset");
  const global=s.global;
  $("global-reset").textContent=global?.last_reset_at?
   "上次 "+fdate(global.last_reset_at)+(global.age_days!=null?" · 已 "+global.age_days.toFixed(1)+" 天":"")+
@@ -463,13 +474,21 @@ $("trigger").onclick=async()=>{
 $("reset-action").onclick=()=>{
  const s=snapshot;if(!s)return;
  $("reset-dialog-title").textContent="Banked Reset ×"+(s.credits?.count??0)+(s.armed?" · 待命":"");
- $("reset-dialog-desc").textContent="已用盡時可以立即重置，或選擇待命直到 5h／週配額任一用盡。也可以明確選擇重置部分已用配額。每次使用會消耗一個 Banked Reset。";
+ const nearest=nearestCredit(s.credits?.available??[]);
+ $("reset-dialog-desc").textContent="已用盡時可以立即重置，或選擇待命直到 5h／週配額任一用盡。也可以明確選擇重置部分已用配額。每次使用會消耗一個 Banked Reset。"+
+  (nearest?"\n最近到期："+fdate(nearest.expires_at)+" · 剩 "+bankedCountdown(nearest.expires_at):"");
  $("reset-arm").textContent=s.armed?"取消待命":"用盡後自動使用一次";
  ($("reset-exhausted") as HTMLButtonElement).disabled=!(s.usage?.five_hour===100||s.usage?.weekly===100||s.usage?.limit_reached);
  ($("reset-now") as HTMLButtonElement).disabled=!(!!s.usage?.five_hour||!!s.usage?.weekly);
  ($("reset-dialog") as HTMLDialogElement).showModal();
 };
-$("reset-cancel").onclick=()=>($("reset-dialog") as HTMLDialogElement).close();
+const resetDialog=$("reset-dialog") as HTMLDialogElement;
+resetDialog.addEventListener("click",event=>{
+ if(event.target!==resetDialog)return;
+ const rect=resetDialog.getBoundingClientRect();
+ if(event.clientX<rect.left||event.clientX>rect.right||event.clientY<rect.top||event.clientY>rect.bottom)resetDialog.close();
+});
+$("reset-cancel").onclick=()=>resetDialog.close();
 $("reset-arm").onclick=async()=>{try{await call("toggle_banked_armed");($("reset-dialog") as HTMLDialogElement).close();await load();}catch(e){toast(String(e));}};
 for(const [id,partial] of [["reset-exhausted",false],["reset-now",true]] as const){
  $(id).onclick=async()=>{
