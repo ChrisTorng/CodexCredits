@@ -40,7 +40,7 @@ jobs:
             --name CodexCredits-Android-v2.0.12-Signed-Release \
             --dir "$RUNNER_TEMP/android-apk"
           cd "$RUNNER_TEMP/android-apk"
-          sha256sum --check SHA256SUMS.txt
+          sed 's#^\\([0-9a-f]\\{64\\}\\)[[:space:]]\+signed/#\\1  #' SHA256SUMS.txt | sha256sum --check
           test -s CodexCredits-Android-v2.0.12-arm64.apk
           unzip -tq CodexCredits-Android-v2.0.12-arm64.apk
           cp CodexCredits-Android-v2.0.12-arm64.apk "$RUNNER_TEMP/CodexCredits-Android.apk"
