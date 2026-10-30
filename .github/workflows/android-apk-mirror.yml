@@ -1,9 +1,6 @@
 name: Publish signed Android APK to CodexCredits direct download
 
 on:
-  push:
-    branches: [main]
-    paths: ['.github/workflows/android-apk-mirror.yml']
   workflow_dispatch:
   workflow_run:
     workflows: ['Android Signed Release']
