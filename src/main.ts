@@ -215,6 +215,11 @@ function paintQuota(id:string,used:number|null|undefined,reset:string|null|undef
  const ideal=valid?[[start,100],[until,0]]:[];
  const now=Date.now();
  const inWindow=valid&&now>=start&&now<=until;
+ const exp=weekly?nearestCredit(snapshot?.credits?.available??[],now):undefined;
+ const expTime=exp?Date.parse(exp.expires_at):NaN;
+ const creditMarker=valid&&weekly&&expTime>start&&expTime<until?
+  [{xAxis:expTime,lineStyle:{color:"#e05252",width:2,type:"dashed"},
+    label:{show:true,formatter:"券到期",position:"insideEndTop",color:"#e05252",fontSize:10}}]:[];
  const ticks=valid?timelineTicks(start,until,weekly):[];
  const tickLabels=ticks.map(t=>({
   type:"text",silent:true,bottom:0,
@@ -239,7 +244,7 @@ function paintQuota(id:string,used:number|null|undefined,reset:string|null|undef
    {name:"實際剩餘",type:"line",data:valid?actual:[],showSymbol:false,lineStyle:{width:2.4,color},itemStyle:{color},areaStyle:{color,opacity:.18},
     markLine:valid?{symbol:["none","none"],silent:true,label:{show:false},
       lineStyle:{color:p.grid,width:1,type:"solid"},
-      data:[{xAxis:start},{xAxis:until},...ticks.map(t=>({xAxis:t})),...(inWindow?[{xAxis:now,lineStyle:{color:p.text,type:"dashed",width:1}}]:[])]}:undefined}
+      data:[{xAxis:start},{xAxis:until},...ticks.map(t=>({xAxis:t})),...creditMarker,...(inWindow?[{xAxis:now,lineStyle:{color:p.text,type:"dashed",width:1}}]:[])]}:undefined}
   ],
   graphic:valid?[boundary(start,false),...tickLabels,boundary(until,true)]:[{
    type:"text",left:10,top:"45%",style:{text:
@@ -692,3 +697,5 @@ async function initialize(){
  await refreshNotificationPermission();
 }
 void initialize();
+// Refresh the local expiry countdown even when quota polling is idle.
+setInterval(()=>{if(snapshot)render();},60_000);
