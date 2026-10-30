@@ -14,8 +14,10 @@ assert windows["productName"]=="CodexCredits"
 assert android["version"]==windows["version"]=="2.0.12"
 assert android["bundle"]["android"]["versionCode"]==2000012
 assert windows["app"]["windows"][0]["title"]=="Codex Credits"
-assert windows["bundle"]["windows"]["nsis"]["shortcutName"]=="Codex Credits"
-assert windows["bundle"]["windows"]["nsis"]["uninstallDisplayName"]=="Codex Credits"
+assert windows["bundle"]["windows"]["nsis"]["installerHooks"]=="nsis/install-hooks.nsh"
+hooks=read("src-tauri/nsis/install-hooks.nsh")
+assert 'WriteRegStr SHCTX "${UNINSTKEY}" "DisplayName" "Codex Credits"' in hooks
+assert "Codex Credits.lnk" in hooks
 assert "<h1>Codex Credits</h1>" in read("src/main.ts")
 assert "<title>Codex Credits</title>" in read("index.html")
 for path in ("src/main.ts","src-tauri/src/lib.rs","mobile/android/UsageHistory.java"):

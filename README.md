@@ -12,7 +12,7 @@ The status page contains the five-hour and weekly cards, next schedule, manual t
 
 ## App name and upgrades
 
-Both Android and Windows display **Codex Credits** (app launcher, header, notifications and tray/shortcut names). Release version: **2.0.12**. Android retains package ID `com.christorng.androidcodextools` and Windows retains app identifier `com.christorng.codexcredits` and the internal NSIS product name `CodexCredits`; do not reset data or uninstall merely to rename the application.
+Both Android and Windows display **Codex Credits** (app launcher, header, notifications and tray/shortcut names). Release version: **2.0.12**. Android retains package ID `com.christorng.androidcodextools` and Windows retains app identifier `com.christorng.codexcredits` and the internal NSIS product name `CodexCredits` (visible Windows installer labels are updated using an NSIS hook); do not reset data or uninstall merely to rename the application.
 
 ## Download
 

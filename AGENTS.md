@@ -14,7 +14,7 @@ This is the **only maintained** repository for the cross-platform Codex Credits 
 - Repository and portable EXE keep the spelling `CodexCredits`.
 - Android application ID **must remain** `com.christorng.androidcodextools`; keep the native Java package/JNI ABI, original AlarmManager/JobScheduler, credentials, schedule and usage history.
 - Original Android signer SHA-256: `177f5e3fed59854e4203dafe13490a75c2438b37731ff0e7af7acbfe45a8e679`. Strictly increase versionCode with each APK release.
-- Windows identifier `com.christorng.codexcredits` and internal NSIS `productName: CodexCredits` remain unchanged to preserve the installed path/upgrade identity; override `shortcutName`, `uninstallDisplayName`, window title and tray text instead.
+- Windows identifier `com.christorng.codexcredits` and internal NSIS `productName: CodexCredits` remain unchanged to preserve the installed path/upgrade identity; use the supported NSIS `installerHooks` macro to rename visible Start Menu/desktop shortcuts and the uninstall registry DisplayName, plus the window title and tray text.
 - Never delete user data or suggest uninstall/clear-data merely to rename.
 
 ## Android signed APK distribution

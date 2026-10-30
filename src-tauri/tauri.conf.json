@@ -36,8 +36,7 @@
     ],
     "windows": {
       "nsis": {
-        "shortcutName": "Codex Credits",
-        "uninstallDisplayName": "Codex Credits"
+        "installerHooks": "nsis/install-hooks.nsh"
       }
     }
   }
