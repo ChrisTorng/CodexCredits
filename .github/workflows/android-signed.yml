@@ -1,0 +1,89 @@
+name: Android Signed Release
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  signed-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: ChrisTorng/android-codex-tools
+          ref: 7055017ca542b66db8716b458ab8534aa563ebc8
+          path: legacy
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - name: Install Android SDK/NDK
+        run: |
+          SDKMANAGER=/usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"
+      - name: Restore original upgrade-compatible keystore
+        env:
+          UPGRADE_KEY_B64: ${{ secrets.ANDROID_UPGRADE_KEYSTORE_BASE64 }}
+        run: |
+          set -euo pipefail
+          test -n "$UPGRADE_KEY_B64" || { echo "::error::Set ANDROID_UPGRADE_KEYSTORE_BASE64 in CodexCredits, using the original keystore."; exit 1; }
+          mkdir -p "$HOME/.android"
+          printf '%s' "$UPGRADE_KEY_B64" | base64 -d > "$HOME/.android/debug.keystore"
+          EXPECTED=177f5e3fed59854e4203dafe13490a75c2438b37731ff0e7af7acbfe45a8e679
+          ACTUAL=$(keytool -list -v -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey |
+            grep -m1 'SHA256:' | sed -E 's/.*SHA256:[[:space:]]*//' | tr -d ':' | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
+          test "$ACTUAL" = "$EXPECTED" || { echo "::error::Android signer does not match the installed app"; exit 1; }
+      - name: Generate app icons
+        run: |
+          python3 -m pip install --quiet Pillow
+          python3 - <<'PY'
+          from PIL import Image
+          from pathlib import Path
+          p=Path("src-tauri/icons")
+          src=Image.open(p/"icon.ico").convert("RGBA")
+          for name,size in (("icon.png",512),("128x128.png",128),("32x32.png",32)):
+              src.resize((size,size),Image.Resampling.LANCZOS).save(p/name)
+          PY
+      - run: npm install
+      - run: npm run test:charts
+      - run: python3 mobile/android/check_branding.py
+      - run: python3 mobile/android/check_entrypoint.py
+      - name: Initialize Android host
+        run: |
+          export NDK_HOME="$ANDROID_HOME/ndk/27.2.12479018"
+          npm run tauri -- android init --ci --skip-targets-install --config src-tauri/tauri.android.conf.json
+      - name: Integrate native scheduler with original signing key
+        run: python3 mobile/android/prepare.py --legacy legacy --release-keystore "$HOME/.android/debug.keystore"
+      - name: Build signed ARM64 APK
+        run: |
+          export NDK_HOME="$ANDROID_HOME/ndk/27.2.12479018"
+          npm run tauri -- android build --apk --target aarch64 --config src-tauri/tauri.android.conf.json
+      - name: Verify release APK and publish artifact
+        run: |
+          set -euo pipefail
+          APK=$(find src-tauri/gen/android/app/build/outputs/apk -type f -name '*.apk' | head -n 1)
+          test -n "$APK"
+          python3 mobile/android/check_dex_jni.py "$APK"
+          AAPT="$ANDROID_HOME/build-tools/35.0.0/aapt"
+          SIGNER="$ANDROID_HOME/build-tools/35.0.0/apksigner"
+          "$AAPT" dump badging "$APK" | grep -F "package: name='com.christorng.androidcodextools'" | grep -F "versionCode='2000012'"
+          "$AAPT" dump badging "$APK" | grep -F "application-label:'Codex Credits'"
+          "$SIGNER" verify --print-certs "$APK" |
+            grep -qi 'Signer #1 certificate SHA-256 digest: 177f5e3fed59854e4203dafe13490a75c2438b37731ff0e7af7acbfe45a8e679'
+          mkdir -p signed
+          cp "$APK" signed/CodexCredits-Android-v2.0.12-arm64.apk
+          stat -c '%n %s bytes' signed/*.apk
+          sha256sum signed/*.apk | tee signed/SHA256SUMS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CodexCredits-Android-v2.0.12-Signed-Release
+          path: signed/
+          if-no-files-found: error

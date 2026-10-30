@@ -50,13 +50,15 @@ jobs:
           PY
       - run: npm install
       - run: npm run test:charts
+      - name: Check shared branding and package IDs
+        run: python3 mobile/android/check_branding.py
       - name: Initialize Android host
         run: |
           export NDK_HOME="$ANDROID_HOME/ndk/27.2.12479018"
           npm run tauri -- android init --ci --skip-targets-install --config src-tauri/tauri.android.conf.json
       - name: Integrate original Android native engine
         run: python3 mobile/android/prepare.py --legacy legacy
-      - name: Compile optimized ARM64 Release APK (signature checked by signing pipeline)
+      - name: Compile optimized ARM64 Release APK (not installable without the original signing key)
         run: |
           export NDK_HOME="$ANDROID_HOME/ndk/27.2.12479018"
           npm run tauri -- android build --apk --target aarch64 --config src-tauri/tauri.android.conf.json
@@ -66,4 +68,4 @@ jobs:
           APK=$(find src-tauri/gen/android/app/build/outputs/apk -type f -name '*.apk' | head -n 1)
           test -n "$APK"
           python3 mobile/android/check_dex_jni.py "$APK"
-          echo "Release compilation passed. Installable original-key signed APK is published by the versioned signing workflow in ChrisTorng/android-codex-tools."
+          echo "Release compilation passed. Signed Android upgrades require the original key in CodexCredits."
