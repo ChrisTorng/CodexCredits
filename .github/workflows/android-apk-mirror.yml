@@ -21,7 +21,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 1
+          fetch-depth: 0
 
       - name: Download signed v2.0.13 APK from this repository
         env:
@@ -33,9 +33,9 @@ jobs:
             RUN_ID=$(gh run list -R "$GITHUB_REPOSITORY" --workflow android-signed.yml --branch main --status success --limit 1 --json databaseId --jq '.[0].databaseId')
           fi
           test -n "$RUN_ID"
-          MAIN_SHA=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq '.object.sha')
+          EXPECTED_SHA=$(git log -1 --format=%H -- src src-tauri mobile package.json .github/workflows/android-signed.yml)
           SIGNED_SHA=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID" --jq '.head_sha')
-          if [ "$SIGNED_SHA" != "$MAIN_SHA" ]; then
+          if [ "$SIGNED_SHA" != "$EXPECTED_SHA" ]; then
             echo "Superseded signed run $RUN_ID, skipping old APK to avoid overwriting a newer release."
             exit 0
           fi
