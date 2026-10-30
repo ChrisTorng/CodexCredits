@@ -40,7 +40,11 @@ jobs:
             --name CodexCredits-Android-v2.0.12-Signed-Release \
             --dir "$RUNNER_TEMP/android-apk"
           cd "$RUNNER_TEMP/android-apk"
-          sed 's#^\\([0-9a-f]\\{64\\}\\)[[:space:]]\+signed/#\\1  #' SHA256SUMS.txt | sha256sum --check
+          EXPECTED=$(awk 'NR==1 {print $1}' SHA256SUMS.txt)
+          grep -Fq 'signed/CodexCredits-Android-v2.0.12-arm64.apk' SHA256SUMS.txt
+          test "${#EXPECTED}" -eq 64
+          ACTUAL_SUM=$(sha256sum CodexCredits-Android-v2.0.12-arm64.apk | cut -d' ' -f1)
+          test "$ACTUAL_SUM" = "$EXPECTED" || { echo "::error::Downloaded APK SHA-256 mismatch"; exit 1; }
           test -s CodexCredits-Android-v2.0.12-arm64.apk
           unzip -tq CodexCredits-Android-v2.0.12-arm64.apk
           cp CodexCredits-Android-v2.0.12-arm64.apk "$RUNNER_TEMP/CodexCredits-Android.apk"
