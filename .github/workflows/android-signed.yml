@@ -1,5 +1,8 @@
 name: Android Signed Release
 on:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/android-signed.yml']
   workflow_dispatch:
 permissions:
   contents: read
