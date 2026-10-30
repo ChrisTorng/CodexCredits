@@ -29,7 +29,15 @@ for name in names:
     text=text.replace("Codex Tools","Codex Credits").replace(
         "Codex-Tools/0.1 (+https://github.com/ChrisTorng/android-codex-tools)",
         "CodexCredits/2.0.13 (+https://github.com/ChrisTorng/CodexCredits)")
+    if name=="Scheduler":
+        # Only staged Java is patched. Keep the pinned legacy repo read-only.
+        marker="            e.apply();\n            UsageHistory.recordSnapshot(c,snapshot(c));"
+        if marker not in text:
+            raise SystemExit("Background credits refresh hook has changed")
+        text=text.replace(marker,
+            "            e.apply();\n            BankedExpiryMonitor.check(c,credits);\n            UsageHistory.recordSnapshot(c,snapshot(c));",1)
     (out/(name+".java")).write_text(text,encoding="utf-8")
+(out/"BankedExpiryMonitor.java").write_bytes(Path("mobile/android/BankedExpiryMonitor.java").read_bytes())
 (out/"LegacyBridge.java").write_bytes(Path("mobile/android/LegacyBridge.java").read_bytes())
 # Required: Rust resolves LegacyBridge methods by exact JNI names at runtime.
 (project/"jni-keep.pro").write_bytes(Path("mobile/android/jni-keep.pro").read_bytes())
