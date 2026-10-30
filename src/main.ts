@@ -24,7 +24,7 @@ type Event={at:string;kind:string;detail:string};
 const $=(id:string)=>document.getElementById(id)!;
 const app=$("app");
 app.innerHTML=[
-'<header class="app-header"><h1>Codex Tools</h1><button class="refresh-icon" id="top-refresh" title="更新配額">↻</button></header>',
+'<header class="app-header"><h1>Codex Credits</h1><button class="refresh-icon" id="top-refresh" title="更新配額">↻</button></header>',
 '<nav class="tabs" aria-label="功能選單"><button class="tab active" data-tab="status">● 狀態</button><button class="tab" data-tab="schedule">◷ 排程</button><button class="tab" data-tab="history">▥ 歷程</button><button class="tab" data-tab="settings">⚙ 設定</button></nav>',
 '<div class="content">',
 '<main class="page visible" id="page-status">',

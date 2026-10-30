@@ -342,14 +342,14 @@ async fn consume(s:&State,allow_partial:bool,selected:Option<String>)->Result<()
 #[tauri::command]async fn ntfy_test(s:tauri::State<'_,Arc<State>>)->Result<String,String>{
  let url=s.settings.lock().unwrap().ntfy_topic.clone();
  if url.is_empty(){return Err("請先儲存 ntfy 網址".into())}
- let result=api::ntfy_send(&url,"Codex Tools 測試","ntfy 通知測試成功").await;
+ let result=api::ntfy_send(&url,"Codex Credits 測試","ntfy 通知測試成功").await;
  let msg=match &result{Ok(_)=>"已發送測試通知".into(),Err(e)=>format!("發送失敗: {e}")};
  *s.ntfy_status.lock().unwrap()=msg;
  result?;Ok(s.ntfy_status.lock().unwrap().clone())
 }
 #[tauri::command]fn native_notify_test(s:tauri::State<'_,Arc<State>>)->Result<String,String>{
  if !s.settings.lock().unwrap().native_notify_enabled{return Err("請先開啟系統通知".into())}
- s.app.notification().builder().title("Codex Tools 測試").body("系統通知已啟用")
+ s.app.notification().builder().title("Codex Credits 測試").body("系統通知已啟用")
   .show().map_err(|e|e.to_string())?;
  Ok("已送出測試通知".into())
 }
@@ -477,7 +477,7 @@ pub fn run(){
   app.manage(state.clone());
   #[cfg(desktop)]
   {
-  let show=MenuItem::with_id(app,"show","顯示 Codex Tools",true,None::<&str>)?;
+  let show=MenuItem::with_id(app,"show","顯示 Codex Credits",true,None::<&str>)?;
   let quit=MenuItem::with_id(app,"quit","結束並停止監測",true,None::<&str>)?;
   let menu=Menu::with_items(app,&[&show,&quit])?;
   let icon=tauri::image::Image::new_owned(vec![46_u8,122,222,255].repeat(256),16,16);

@@ -24,7 +24,12 @@ for name in names:
     # Only UsageHistory is patched: retain the original Android scheduler and
     # correct Global Reset identification for operator-observed events.
     source=(Path("mobile/android")/(name+".java")) if name=="UsageHistory" else (old/(name+".java"))
-    (out/(name+".java")).write_bytes(source.read_bytes())
+    # Rename user-visible strings only in staged copies; legacy source is read-only.
+    text=source.read_text(encoding="utf-8")
+    text=text.replace("Codex Tools","Codex Credits").replace(
+        "Codex-Tools/0.1 (+https://github.com/ChrisTorng/android-codex-tools)",
+        "CodexCredits/2.0.12 (+https://github.com/ChrisTorng/CodexCredits)")
+    (out/(name+".java")).write_text(text,encoding="utf-8")
 (out/"LegacyBridge.java").write_bytes(Path("mobile/android/LegacyBridge.java").read_bytes())
 # Required: Rust resolves LegacyBridge methods by exact JNI names at runtime.
 (project/"jni-keep.pro").write_bytes(Path("mobile/android/jni-keep.pro").read_bytes())
@@ -69,6 +74,17 @@ for permission in perms:
         ET.SubElement(root,"uses-permission",{A("name"):name})
 app=root.find("application")
 if app is None:raise SystemExit("Missing application")
+# Tauri's productName alone does not consistently set the launcher label.
+app.set(A("label"),"Codex Credits")
+for activity in app.findall("activity"):
+    activity.set(A("label"),"Codex Credits")
+strings=project/"src/main/res/values/strings.xml"
+if strings.is_file():
+    values=ET.parse(strings)
+    for entry in values.getroot().findall("string"):
+        if entry.get("name")=="app_name":
+            entry.text="Codex Credits"
+    values.write(strings,encoding="utf-8",xml_declaration=True)
 app.set(A("allowBackup"),"false")
 app.set(A("usesCleartextTraffic"),"true")
 for name in ("AlarmReceiver","BootReceiver"):

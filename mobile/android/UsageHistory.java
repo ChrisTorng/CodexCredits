@@ -118,7 +118,7 @@ final class UsageHistory {
             CodexClient cli=new CodexClient(c);
             String forecastRaw=cli.getPublicJson(
                     RESET_FORECAST_API,
-                    "Codex-Tools/0.1 (+https://github.com/ChrisTorng/android-codex-tools)");
+                    "CodexCredits/2.0.12 (+https://github.com/ChrisTorng/CodexCredits)");
             JSONObject forecast=new JSONObject(forecastRaw);
 
             long lastReset=0;
@@ -136,7 +136,7 @@ final class UsageHistory {
 
             String timelineRaw=cli.getPublicJson(
                     RESET_API,
-                    "Codex-Tools/0.1 (+https://github.com/ChrisTorng/android-codex-tools)");
+                    "CodexCredits/2.0.12 (+https://github.com/ChrisTorng/CodexCredits)");
             JSONObject timeline=new JSONObject(timelineRaw);
             JSONArray arr=timeline.optJSONArray("events");
             List<Long> resets=new ArrayList<>();
@@ -272,7 +272,7 @@ final class UsageHistory {
         try{
             String raw=new CodexClient(c).getPublicJson(
                     RESET_API,
-                    "Codex-Tools/0.1 (+https://github.com/ChrisTorng/android-codex-tools)");
+                    "CodexCredits/2.0.12 (+https://github.com/ChrisTorng/CodexCredits)");
             JSONObject root=new JSONObject(raw);
             JSONArray events=root.optJSONArray("events");
             if(events==null)return null;
