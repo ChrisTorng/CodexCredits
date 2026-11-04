@@ -231,10 +231,11 @@ async fn remind_expiring_banked(s:&State,credits:&api::Credits){
  // Commit first so a crash, restart, Android resume or repeated refresh
  // cannot deliver duplicate reminder notifications for this milestone.
  if storage::set_meta(&s.db.lock().unwrap(),&key,Some(&stage.to_string())).is_err(){return;}
- record(s,"banked_reminder",&format!("Banked Reset {description} · 到期 {}",
-  credit.expires_at));
- notify(s,"Banked Reset 即將到期",&format!("{description} · 到期 {}",
-  credit.expires_at)).await;
+ let expiry=chrono::DateTime::parse_from_rfc3339(&credit.expires_at)
+  .map(|d|d.with_timezone(&chrono::Local).format("%-m/%-d %H:%M").to_string())
+  .unwrap_or_else(|_|"—".into());
+ record(s,"banked_reminder",&format!("Banked Reset {description} · 到期 {expiry}"));
+ notify(s,"Banked Reset 即將到期",&format!("{description} · 到期 {expiry}")).await;
 }
 async fn notify(s:&State,title:&str,message:&str){
  let settings=s.settings.lock().unwrap().clone();
@@ -512,7 +513,7 @@ pub fn run(){
   app.manage(state.clone());
   #[cfg(desktop)]
   {
-  let show=MenuItem::with_id(app,"show","開啟 Credit Codex",true,None::<&str>)?;
+  let show=MenuItem::with_id(app,"show","開啟 Codex Credits",true,None::<&str>)?;
   let quit=MenuItem::with_id(app,"quit","結束並停止監測",true,None::<&str>)?;
   let separator=PredefinedMenuItem::separator(app)?;
   let menu=Menu::with_items(app,&[&show,&separator,&quit])?;

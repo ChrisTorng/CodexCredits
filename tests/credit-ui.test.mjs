@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {nearestCredit,bankedCountdown,bankedWarningStage,timelineTicks,historyFallbackTicks,DAY,HOUR} from "../src/credit-ui.ts";
+import {nearestCredit,activeCreditsByExpiry,compactLocalDateTime,chartTooltipPosition,quotaInteriorTicks,bankedCountdown,bankedWarningStage,timelineTicks,historyFallbackTicks,DAY,HOUR} from "../src/credit-ui.ts";
 const now=Date.parse("2026-10-30T12:00:00Z"),future=(ms)=>new Date(now+ms).toISOString();
 test("nearest unexpired credit uses expiry, not API array order",()=>{
  assert.equal(nearestCredit([{id:"late",expires_at:future(12*DAY)},{id:"old",expires_at:future(-DAY)},{id:"soon",expires_at:future(2*DAY)}],now)?.id,"soon");
@@ -20,4 +20,30 @@ test("5h whole-hour ticks and weekly local-midnight ticks",()=>{
 test("history 06/12/18 labels exist with no real 5h window",()=>{
  const at=new Date("2026-10-30T00:00:00").getTime();
  assert.deepEqual(historyFallbackTicks(at,at+DAY).map(t=>new Date(t).getHours()),[6,12,18]);
+});
+
+test("all valid banked credits sorted by expiry, including equal-expiry entries",()=>{
+ const credits=[
+  {id:"last",expires_at:future(8*DAY)},{id:"expired",expires_at:future(-DAY)},
+  {id:"first",expires_at:future(DAY)},{id:"second",expires_at:future(3*DAY)}
+ ];
+ assert.deepEqual(activeCreditsByExpiry(credits,now).map(c=>c.id),["first","second","last"]);
+ assert.equal(credits[0].id,"last"); // API payload remains unchanged
+});
+test("compact expiration omits year, seconds and timezone suffix",()=>{
+ const display=compactLocalDateTime("2026-11-06T22:22:29.313184Z");
+ assert.match(display,/\d{1,2}\/\d{1,2}\s+\d{2}:\d{2}/);
+ assert.doesNotMatch(display,/2026|Z|313184/);
+});
+test("tooltip stays inside chart and prefers pointer left",()=>{
+ assert.deepEqual(chartTooltipPosition([250,85],[360,180],[120,60]),[112,55]);
+ assert.deepEqual(chartTooltipPosition([20,8],[360,180],[120,60]),[38,6]);
+ const [x,y]=chartTooltipPosition([5,175],[150,180],[125,80]);
+ assert.ok(x>=0&&x+125<=150&&y>=0&&y+80<=180);
+});
+test("quota edge labels take priority over intermediate ticks",()=>{
+ const from=0,to=5*HOUR,width=320;
+ const visible=quotaInteriorTicks([HOUR,2*HOUR,3*HOUR,4*HOUR],from,to,width,false);
+ assert.ok(visible.every(t=>{const x=5+(width-10)*t/to;return x>=72&&x<=width-72;}));
+ assert.ok(visible.length<4);
 });

@@ -42,7 +42,13 @@ final class BankedExpiryMonitor {
             String ntfy=Scheduler.ntfyUrl(context);
             if(!AndroidNotifications.enabled(context)&&ntfy.isEmpty())return;
             prefs.edit().putInt(key.toString(),stage).apply();
-            String message=stageText+" · 到期 "+nearest.expiresAt;
+            String expiry;
+            try {
+                expiry=OffsetDateTime.parse(nearest.expiresAt)
+                    .atZoneSameInstant(java.time.ZoneId.systemDefault())
+                    .format(java.time.format.DateTimeFormatter.ofPattern("M/d HH:mm",Locale.TAIWAN));
+            } catch(Exception ignored) { expiry=nearest.expiresAt; }
+            String message=stageText+" · 到期 "+expiry;
             Scheduler.note(context,"Banked Reset "+message);
             AndroidNotifications.post(context,"Banked Reset 即將到期",message);
             if(!ntfy.isEmpty()){
