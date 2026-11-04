@@ -52,17 +52,10 @@ jobs:
           ACTUAL=$(keytool -list -v -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey |
             grep -m1 'SHA256:' | sed -E 's/.*SHA256:[[:space:]]*//' | tr -d ':' | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
           test "$ACTUAL" = "$EXPECTED" || { echo "::error::Android signer does not match the installed app"; exit 1; }
-      - name: Generate app icons
+      - name: Generate transparent app icon from shared source
         run: |
           python3 -m pip install --quiet Pillow
-          python3 - <<'PY'
-          from PIL import Image
-          from pathlib import Path
-          p=Path("src-tauri/icons")
-          src=Image.open(p/"icon.ico").convert("RGBA")
-          for name,size in (("icon.png",512),("128x128.png",128),("32x32.png",32)):
-              src.resize((size,size),Image.Resampling.LANCZOS).save(p/name)
-          PY
+          python3 scripts/prepare_app_icons.py
       - run: npm install
       - run: npm run test:charts
       - run: python3 mobile/android/check_branding.py
@@ -85,16 +78,16 @@ jobs:
           python3 mobile/android/check_dex_jni.py "$APK"
           AAPT="$ANDROID_HOME/build-tools/35.0.0/aapt"
           SIGNER="$ANDROID_HOME/build-tools/35.0.0/apksigner"
-          "$AAPT" dump badging "$APK" | grep -F "package: name='com.christorng.androidcodextools'" | grep -F "versionCode='2000014'"
+          "$AAPT" dump badging "$APK" | grep -F "package: name='com.christorng.androidcodextools'" | grep -F "versionCode='2000015'"
           "$AAPT" dump badging "$APK" | grep -F "application-label:'Codex Credits'"
           "$SIGNER" verify --print-certs "$APK" |
             grep -qi 'Signer #1 certificate SHA-256 digest: 177f5e3fed59854e4203dafe13490a75c2438b37731ff0e7af7acbfe45a8e679'
           mkdir -p signed
-          cp "$APK" signed/CodexCredits-Android-v2.0.14-arm64.apk
+          cp "$APK" signed/CodexCredits-Android-v2.0.15-arm64.apk
           stat -c '%n %s bytes' signed/*.apk
           sha256sum signed/*.apk | tee signed/SHA256SUMS.txt
       - uses: actions/upload-artifact@v4
         with:
-          name: CodexCredits-Android-v2.0.14-Signed-Release
+          name: CodexCredits-Android-v2.0.15-Signed-Release
           path: signed/
           if-no-files-found: error

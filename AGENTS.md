@@ -36,3 +36,9 @@ This is the **only maintained** repository for the cross-platform Codex Credits 
 - Every change to the product is delivered as a **paired Android and Windows version**; update package.json, Cargo.toml, Android/Windows Tauri configs and workflow versionCode / filenames together.
 - Validate the original Android keystore fingerprint and signature compatibility, run the Android signed-release workflow, and verify both Android and Windows workflow artifacts before distributing.
 - A successful compile-only Android job is not a signed deliverable. Keep the same app ID to preserve install upgrades and user data.
+
+## UI correctness (Android and Windows)
+- Canonical icon: **transparent** twin loops, cyan at lower left and gold at upper right with colored center dots; never replace it with a letter C or white square. Regenerate PNG/ICO using `python scripts/prepare_app_icons.py` before native packaging. The header uses `src-tauri/icons/brand.svg`.
+- The status card lists every available Banked Reset by expiry. The action uses **one** credit and the dialog describes only the earliest-expiring credit; backend redemption must select that same credit, irrespective of API list order.
+- Global Reset forecasts that are already in the past are not future predictions. Do not show stale 24h/48h percentages; clearly distinguish observed elapsed time from historical average/median.
+- History chart guide times follow the effective daily schedule and configured 5-hour continuations. Plot ideal five-hour lines only for confirmed quota windows or recorded successful triggers, not unexecuted scheduled future windows.

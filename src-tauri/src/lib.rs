@@ -284,8 +284,14 @@ async fn consume(s:&State,allow_partial:bool,selected:Option<String>)->Result<()
  }
  let access=oauth::valid_access().await?;
  let c=api::fetch_credits(&access.token,access.account_id.as_deref()).await?;
- let credit=c.available.iter().find(|c|selected.as_ref().is_none_or(|id|id==&c.id))
-  .ok_or("目前沒有可用的 Banked Reset")?;
+ let credit=c.available.iter()
+  .filter(|c|selected.as_ref().is_none_or(|id|id==&c.id))
+  .filter_map(|c|chrono::DateTime::parse_from_rfc3339(&c.expires_at)
+    .ok().map(|expiry|(c,expiry.timestamp())))
+  .filter(|(_,expiry)|*expiry>now())
+  .min_by_key(|(_,expiry)|*expiry)
+  .map(|(credit,_)|credit)
+  .ok_or("目前沒有有效的 Banked Reset")?;
  if c.count<=0{return Err("Banked Reset 可用次數為 0".into())}
  let windows=api::consume_credit(&access.token,access.account_id.as_deref(),&credit.id).await?;
  if windows<=0{return Err("伺服器未重置任何配額視窗".into())}
@@ -358,9 +364,10 @@ async fn consume(s:&State,allow_partial:bool,selected:Option<String>)->Result<()
 #[tauri::command]fn toggle_banked_armed(s:tauri::State<'_,Arc<State>>)->Result<Snapshot,String>{
  let previous=s.armed.lock().unwrap().clone();
  let next=if previous.is_some(){None}else{
-  let credit=s.credits.lock().unwrap().as_ref().and_then(|x|x.available.first().cloned())
+  let credit=s.credits.lock().unwrap().as_ref()
+   .and_then(|x|banked_reminder::nearest(x,now()).map(|(credit,_)|credit.id.clone()))
    .ok_or("沒有可用的 Banked Reset")?;
-  Some(credit.id)
+  Some(credit)
  };
  storage::set_meta(&s.db.lock().unwrap(),"banked_armed",next.as_deref())?;
  #[cfg(target_os="android")]

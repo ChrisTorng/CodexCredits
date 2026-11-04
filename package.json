@@ -1,12 +1,12 @@
 {
   "name": "codexcredits",
-  "version": "2.0.14",
+  "version": "2.0.15",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite --port 1420",
     "build": "tsc --noEmit && vite build",
-    "test:charts": "node --experimental-strip-types --test tests/chart-windows.test.mjs tests/history-feed.test.mjs tests/credit-ui.test.mjs",
+    "test:charts": "node --experimental-strip-types --test tests/chart-windows.test.mjs tests/history-feed.test.mjs tests/credit-ui.test.mjs tests/global-reset-ui.test.mjs",
     "tauri": "tauri"
   },
   "dependencies": {

@@ -132,3 +132,37 @@ export function windowBoundaries(windows:readonly FiveHourWindow[],from:number,t
   .filter(x=>x>=from&&x<=to).sort((a,b)=>a-b);
  return ticks.filter((t,i)=>i===0||t-ticks[i-1]>RESET_TOLERANCE);
 }
+
+/** Guide positions come from actual configured anchors and their 5h followups,
+ * including per-day overrides. A guide is NOT proof that the trigger ran. */
+export type ChartRule={hour:number;minute:number;auto_count:number;enabled:boolean};
+export function historyScheduleGuides(
+ rules:readonly ChartRule[],dayStart:number,dayEnd:number
+):number[]{
+ const times:number[]=[];
+ for(const rule of rules){
+  if(!rule.enabled||rule.hour<0||rule.hour>=24||rule.minute<0||rule.minute>=60)continue;
+  for(let i=0;i<=Math.min(6,Math.max(0,rule.auto_count));i++){
+   const time=new Date(dayStart);
+   time.setHours(rule.hour+5*i,rule.minute,0,0);
+   if(time.getTime()>=dayStart&&time.getTime()<dayEnd)times.push(time.getTime());
+  }
+ }
+ return [...new Set(times)].sort((a,b)=>a-b);
+}
+/** A successful trigger log is evidence of an actual started window, even if
+ * quota never dropped below 100%; do not equate mere scheduled times to events. */
+export type ConfirmedTriggerEvent={at:string;kind:string;detail:string};
+export function eventConfirmedFiveHourWindows(
+ events:readonly ConfirmedTriggerEvent[],observed:readonly FiveHourWindow[],now=Date.now()
+):FiveHourWindow[]{
+ const found:FiveHourWindow[]=[];
+ for(const e of events){
+  if(e.kind!=="trigger"||!e.detail.includes("觸發成功"))continue;
+  const at=Date.parse(e.at);
+  if(!valid(at)||at>now||at<now-31*24*3600000)continue;
+  if(observed.some(w=>Math.abs(w.start-at)<10*60000 || (w.start<=at&&at<w.end)))continue;
+  found.push({start:at,end:at+FIVE_HOUR_MS,estimated:true});
+ }
+ return interruptAtNextReset(found);
+}

@@ -42,17 +42,10 @@ jobs:
           SDKMANAGER=/usr/local/lib/android/sdk/cmdline-tools/latest/bin/sdkmanager
           yes | "$SDKMANAGER" --licenses >/dev/null || true
           "$SDKMANAGER" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"
-      - name: Prepare Android app icons
+      - name: Generate transparent app icon from shared source
         run: |
           python3 -m pip install --quiet Pillow
-          python3 - <<'PY'
-          from PIL import Image
-          from pathlib import Path
-          root=Path("src-tauri/icons")
-          src=Image.open(root/"icon.ico").convert("RGBA")
-          for name,size in (("icon.png",512),("128x128.png",128),("32x32.png",32)):
-              src.resize((size,size),Image.Resampling.LANCZOS).save(root/name)
-          PY
+          python3 scripts/prepare_app_icons.py
       - run: npm install
       - run: npm run test:charts
       - name: Check shared branding and package IDs
