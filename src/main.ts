@@ -211,15 +211,17 @@ function chartPalette(){return theme==="dark"||(theme==="system"&&matchMedia("(p
 function paintQuota(id:string,used:number|null|undefined,reset:string|null|undefined,weekly:boolean,confirmed:boolean){
  const chart=getChart(id),p=chartPalette();
  const until=reset?Date.parse(reset):NaN,span=weekly?7*24*3600000:FIVE_HOUR_MS;
- const valid=Number.isFinite(until)&&until>0&&(weekly||confirmed);
- const start=valid?until-span:0;
- const source=valid?samples.filter(x=>{
+ const resetKnown=Number.isFinite(until)&&until>0;
+ const start=resetKnown?until-span:0;
+ const source=resetKnown?samples.filter(x=>{
   const t=Date.parse(x.at),r=weekly?x.weekly_reset:x.five_reset;
   return t>=start-60000&&t<=until+60000&&r&&Math.abs(Date.parse(r)-until)<=120000;
  }):[];
+ const valid=resetKnown&&(weekly||confirmed||source.length>0);
  const color=weekly?"#e89134":"#2f80ed";
  const actual=source.map(x=>[Date.parse(x.at),safeRemaining(weekly?x.weekly:x.five_hour)]);
- const ideal=valid?[[start,100],[until,0]]:[];
+ // Unconfirmed historical samples never justify an invented ideal 5h slope.
+ const ideal=valid&&(weekly||confirmed)?[[start,100],[until,0]]:[];
  const now=Date.now();
  const inWindow=valid&&now>=start&&now<=until;
  const exp=weekly?nearestCredit(snapshot?.credits?.available??[],now):undefined;
@@ -351,8 +353,12 @@ function render(){
  if(!snapshot)return;
  const s=snapshot,u=s.usage,mode=s.settings.mode;
  const authInvalid=!!s.error&&/401|重新登入|登入逾期|憑證已失效/i.test(s.error);
+ const observedAt=u?.checked_at?Date.parse(u.checked_at):0;
+ const cachedReading=Number.isFinite(observedAt)&&observedAt>0&&Date.now()-observedAt>90_000;
  $("account").textContent=s.signed_in
-  ?(authInvalid?"ChatGPT 憑證已失效 · 請重新登入":"ChatGPT 已登入 · "+(u?.plan??"—")+(u?.checked_at?" · 更新 "+fdate(u.checked_at):""))
+  ?(authInvalid?"ChatGPT 憑證已失效 · 請重新登入":"ChatGPT 已登入 · "+(u?.plan??"—")+
+    (u?.checked_at?(cachedReading?" · 上次採樣 ":" · 更新 ")+fdate(u.checked_at):"")+
+    (cachedReading?" · 更新中":""))
   :"ChatGPT 尚未登入";
  $("primary-percent").textContent=percent(u?.five_hour);
  $("weekly-percent").textContent=percent(u?.weekly);
@@ -362,7 +368,7 @@ function render(){
  const checkedAt=u?.checked_at?Date.parse(u.checked_at):0;
  const stale=!Number.isFinite(checkedAt)||checkedAt<=0||Date.now()-checkedAt>15*60000;
  $("trigger-preview").textContent=!s.signed_in?"請先登入":
-   stale?"正在取得最新配額…":
+   stale?(u?.checked_at?"顯示上次用量 · 自動更新中":"正在取得最新用量…"):
    confirmed?"5h 進行中 · 下次可開始："+fdate(u?.five_reset):
    "可立即開始 5h · 預估重置 "+fdate(new Date(Date.now()+5*3600000).toISOString());
  ($("trigger") as HTMLButtonElement).disabled=!s.signed_in||stale||confirmed||!u?.allowed||u?.weekly===100;
