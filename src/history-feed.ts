@@ -1,4 +1,10 @@
 // Build a recent-first history feed without losing underlying diagnostic data.
+import {compactLocalDateTime} from "./credit-ui.ts";
+export function formatEventDetail(detail:string):string{
+ // Format stored and new backend RFC3339 timestamps without modifying SQLite history.
+ return detail.replace(/\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})\b/g,
+  iso=>compactLocalDateTime(iso));
+}
 export type FeedSample={at:string;five_hour:number|null;weekly:number|null;five_reset:string|null;weekly_reset:string|null};
 export type FeedEvent={at:string;kind:string;detail:string};
 export type FeedItem={at:string;kind:"event"|"sample";detail:string;source:FeedEvent|FeedSample};
@@ -14,7 +20,7 @@ export function buildHistoryFeed(samples:readonly FeedSample[],events:readonly F
  const items:FeedItem[]=[];
  for(const e of events){
   if(!Number.isFinite(at(e)))continue;
-  items.push({kind:"event",at:e.at,detail:e.detail,source:e});
+  items.push({kind:"event",at:e.at,detail:formatEventDetail(e.detail),source:e});
  }
  const raw:FeedItem[]=[];
  for(let i=0;i<ordered.length;i++){
