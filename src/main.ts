@@ -182,6 +182,7 @@ for(const btn of Array.from(document.querySelectorAll<HTMLButtonElement>(".tab")
  btn.onclick=()=>showPage(btn.dataset.tab??(btn.dataset.group==="planning"?"schedule":"status"));
 }
 wideLayout.addEventListener("change",()=>showPage(page));
+showPage(page);
 function applyTheme(value:string){
  theme=value;
  const dark=value==="dark"||(value==="system"&&matchMedia("(prefers-color-scheme: dark)").matches);
