@@ -46,28 +46,60 @@ def decode_resource(payload: bytes) -> Image.Image:
 
 def check_pe(path: Path) -> None:
     pe = pefile.PE(str(path), fast_load=False)
-    sizes = set()
+    icon_resources = {}
+    groups = []
     for entry in pe.DIRECTORY_ENTRY_RESOURCE.entries:
-        if entry.id != RT_ICON:
+        if entry.id not in (RT_ICON, 14):
             continue
-        for icon in entry.directory.entries:
-            for lang in icon.directory.entries:
+        for item in entry.directory.entries:
+            for lang in item.directory.entries:
                 record = lang.data.struct
                 payload = pe.get_data(record.OffsetToData, record.Size)
-                try:
-                    img = decode_resource(payload)
-                except Exception:
-                    continue
-                if recognized_brand(img):
-                    sizes.add(img.size[0])
-    # 16px RT_ICON is the crucial resource Explorer and Windows taskbar use.
-    required = {16, 32}
-    if not required.issubset(sizes):
-        raise SystemExit(
-            f"{path}: missing embedded cyan/gold icons at {sorted(required)}; "
-            f"brand frames found: {sorted(sizes)}"
-        )
-    print(f"{path.name}: verified cyan/gold embedded icon frames {sorted(sizes)}")
+                if entry.id == RT_ICON:
+                    icon_resources[item.id] = payload
+                else:
+                    groups.append(payload)
+    if not groups:
+        raise SystemExit(f"{path}: PE has no RT_GROUP_ICON resources")
+    # Explorer selects a GROUP_ICON and then refers to its icon IDs. Merely
+    # finding the brand elsewhere among unused RT_ICON resources is not enough.
+    for group_number, group in enumerate(groups, 1):
+        if len(group) < 6:
+            raise SystemExit(f"{path}: truncated icon group")
+        count = struct.unpack_from("<H", group, 4)[0]
+        sizes = set()
+        for index in range(count):
+            offset = 6 + index * 14
+            if offset + 14 > len(group):
+                raise SystemExit(f"{path}: corrupt icon group entry")
+            width, height, _, _, _, _, _, resource_id = struct.unpack_from(
+                "<BBBBHHIH", group, offset
+            )
+            width = width or 256
+            height = height or 256
+            payload = icon_resources.get(resource_id)
+            if not payload:
+                continue
+            try:
+                img = decode_resource(payload)
+            except Exception as exc:
+                raise SystemExit(f"{path}: cannot decode group icon {resource_id}: {exc}")
+            if img.size != (width, height):
+                raise SystemExit(f"{path}: group icon {resource_id} resolution mismatch")
+            if recognized_brand(img):
+                sizes.add(width)
+            elif width in (16, 32):
+                raise SystemExit(
+                    f"{path}: embedded group {group_number} {width}px icon "
+                    "is not the cyan/gold brand (possibly stale C)"
+                )
+        if not {16, 32}.issubset(sizes):
+            raise SystemExit(
+                f"{path}: group {group_number} lacks branded 16/32px icons; "
+                f"verified: {sorted(sizes)}"
+            )
+        print(f"{path.name} group {group_number}: verified {sorted(sizes)}")
+    print(f"{path.name}: all {len(groups)} embedded icon groups validated")
 
 
 def check_source(path: Path) -> None:
