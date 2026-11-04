@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {buildHistoryFeed} from "../src/history-feed.ts";
+import {buildHistoryFeed,formatEventDetail} from "../src/history-feed.ts";
 const stamp=(t)=>new Date(t).toISOString();
 const sample=(t,five,weekly)=>({at:stamp(t),five_hour:five,weekly,
  five_reset:null,weekly_reset:null});
@@ -42,4 +42,11 @@ test("events and changes sort together, preserving older diagnostics on demand",
  const feed=buildHistoryFeed([sample(now,0,27)],events,now);
  assert.deepEqual(feed.recent.map(x=>x.detail),["new reset","today banked"]);
  assert.deepEqual(feed.archive.map(x=>x.detail),["older DNS error"]);
+});
+
+test("historical Banked Reset ISO timestamps display local month/day and minute only",()=>{
+ const detail=formatEventDetail("Banked Reset 剩 3 天 · 到期 2026-11-06T22:22:29.313184Z");
+ assert.match(detail,/到期 \d{1,2}\/\d{1,2} \d{2}:\d{2}/);
+ assert.doesNotMatch(detail,/2026|Z|313184/);
+ assert.equal(formatEventDetail("Global Reset · 已確認"),"Global Reset · 已確認");
 });
