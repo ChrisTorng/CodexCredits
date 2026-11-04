@@ -36,7 +36,10 @@
     ],
     "windows": {
       "nsis": {
-        "installerHooks": "nsis/install-hooks.nsh"
+        "installerHooks": "nsis/install-hooks.nsh",
+        "template": "nsis/installer.nsi",
+        "installerIcon": "icons/icon.ico",
+        "uninstallerIcon": "icons/icon.ico"
       }
     }
   }
