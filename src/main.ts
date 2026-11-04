@@ -8,7 +8,7 @@ import {GridComponent,TooltipComponent,LegendComponent,TitleComponent,MarkLineCo
 import {CanvasRenderer} from "echarts/renderers";
 
 echarts.use([LineChart,GridComponent,TooltipComponent,LegendComponent,TitleComponent,MarkLineComponent,GraphicComponent,CanvasRenderer]);
-import {actualFiveHourWindows,observedQuotaWindows,scheduledFiveHourWindows,interruptAtNextReset,idealSegment,idealQuotaSegment,windowBoundaries,readableBoundaries,clockLabel,FIVE_HOUR_MS} from "./chart-windows";
+import {actualFiveHourWindows,observedQuotaWindows,eventConfirmedFiveHourWindows,historyScheduleGuides,interruptAtNextReset,idealSegment,idealQuotaSegment,windowBoundaries,readableBoundaries,clockLabel,FIVE_HOUR_MS} from "./chart-windows";
 import {buildHistoryFeed} from "./history-feed";
 import {nearestCredit,activeCreditsByExpiry,compactLocalDateTime,bankedCountdown,chartTooltipPosition,quotaInteriorTicks,timelineTicks,historyFallbackTicks} from "./credit-ui";
 import "./style.css";
@@ -277,12 +277,13 @@ function paintHistory(id:string,offset:number){
  });
  const u=snapshot?.usage;
  const history=actualFiveHourWindows(samples,u?.five_reset,!!u?.primary_confirmed,now);
- const planned=scheduledFiveHourWindows(snapshot?.next,now,start,end,history);
- const windows=interruptAtNextReset([...history,...planned]).filter(w=>w.end>start&&w.start<end);
+ const triggered=eventConfirmedFiveHourWindows(events,history,now);
+ // Configured schedule guides are not treated as evidence of execution.
+ const windows=interruptAtNextReset([...history,...triggered]).filter(w=>w.start<=now&&w.end>start&&w.start<end);
  const weeklyWindows=observedQuotaWindows(samples,"weekly",u?.weekly_reset,false,now).filter(w=>w.end>start&&w.start<end);
  const boundaries=windowBoundaries(windows,start,end);
- const fallback=historyFallbackTicks(start,end).filter(t=>!boundaries.some(b=>Math.abs(b-t)<15*60000));
- const labels=readableBoundaries([...boundaries,...fallback].sort((a,b)=>a-b),start,end,chart.getWidth()-12);
+ const guides=historyScheduleGuides(allRules(today(offset)),start,end);
+ const labels=readableBoundaries(guides.length?guides:boundaries,start,end,chart.getWidth()-12);
  const plotWidth=Math.max(1,chart.getWidth()-10);
  const graphics=labels.map(t=>({
   type:"text",silent:true,
@@ -293,13 +294,13 @@ function paintHistory(id:string,offset:number){
  const globalTime=snapshot?.global?.last_reset_at?Date.parse(snapshot.global.last_reset_at):NaN;
  const globalMark=Number.isFinite(globalTime)&&globalTime>=start&&globalTime<end?
   {xAxis:globalTime,lineStyle:{type:"dashed",color:"#999",width:1}}:null;
- const markData=[...boundaries,...fallback].map(t=>({
+ const markData=[...new Set([...guides,...boundaries])].sort((a,b)=>a-b).map(t=>({
   xAxis:t,lineStyle:{type:"solid",color:p.grid,width:1.3}
  }));
  const palette=[["5 小時","#2f80ed"],["週配額","#e89134"]] as const;
  const weeklyIdeal=()=>weeklyWindows.map(w=>({
   name:"週配額理想",type:"line",showSymbol:false,silent:true,
-  data:idealQuotaSegment(w,start,end,7*24*3600000),
+  data:idealQuotaSegment(w,start,Math.min(end,now),7*24*3600000),
   lineStyle:{color:palette[1][1],type:"dashed",width:1.2,opacity:.85},
   tooltip:{show:false}
  }));
@@ -311,7 +312,7 @@ function paintHistory(id:string,offset:number){
   xAxis:{type:"time",min:start,max:end,interval:6*3600000,
    axisLabel:{show:false,fontSize:9,color:p.text,hideOverlap:true,
     formatter:(v:number)=>clockLabel(v)},
-   axisLine:{show:false},splitLine:{show:boundaries.length===0,lineStyle:{color:p.grid}},axisTick:{show:false}},
+   axisLine:{show:false},splitLine:{show:false},axisTick:{show:false}},
   yAxis:{type:"value",min:0,max:100,interval:50,axisLabel:{show:false},axisLine:{show:false},splitLine:{lineStyle:{color:p.grid}}},
   tooltip:{trigger:"axis",confine:true,
     position:(point:number[],_params:unknown,_dom:unknown,_rect:unknown,size:{viewSize:number[];contentSize:number[]})=>
@@ -366,19 +367,23 @@ function render(){
  ($("trigger") as HTMLButtonElement).disabled=!s.signed_in||stale||confirmed||!u?.allowed||u?.weekly===100;
  const credits=s.credits;const available=credits?.count??0;
  $("reset-title").textContent="Banked Reset ×"+available+(s.armed?" · 待命":"");
- $("reset-action").textContent="Banked Reset ×"+available+(s.armed?" · 待命":"");
+ $("reset-action").textContent="使用 Banked Reset";
  ($("reset-action") as HTMLButtonElement).hidden=available<=0&&!s.armed;
  const active=activeCreditsByExpiry(credits?.available??[]);
  $("reset-expiry").textContent=(s.armed?"用盡後自動重置\n":"")+
   (active.length?active.map((c,i)=>(i+1)+". 到期 "+fdate(c.expires_at)+" · 剩 "+bankedCountdown(c.expires_at)).join("\n"):
    "目前沒有有效的 Banked Reset");
  const global=s.global;
+ const lastReset=global?.last_reset_at?Date.parse(global.last_reset_at):NaN;
+ const age=Number.isFinite(lastReset)?Math.max(0,(Date.now()-lastReset)/86400000):null;
+ const overdue=age!=null&&global?.median_days!=null&&age>global.median_days;
  $("global-reset").textContent=global?.last_reset_at?
-  "上次 "+fdate(global.last_reset_at)+(global.age_days!=null?" · 已 "+global.age_days.toFixed(1)+" 天":"")+
-  (global.median_days!=null&&global.avg_days!=null?
-    "\n近期間隔 均 "+global.avg_days.toFixed(1)+" 天 / 中 "+global.median_days.toFixed(1)+" 天 · 推估 "+fdate(global.median_estimate_at):"")+
-  (global.p24!=null||global.p48!=null?" · "+(global.p24!=null?"24h "+global.p24+"%":"")+(global.p48!=null?" / 48h "+global.p48+"%":""):"")
-  :"尚無資料 · codex-reset.com";
+   "上次 "+fdate(global.last_reset_at)+(age!=null?" · 已 "+age.toFixed(1)+" 天":"")+
+   (global.median_days!=null&&global.avg_days!=null?
+     "\n近期間隔 平均 "+global.avg_days.toFixed(1)+" 天 / 中位數 "+global.median_days.toFixed(1)+" 天":"")+
+   (overdue?"\n已超過近期中位數；無可靠的剩餘時間推估，下一次可能隨時發生":
+     "\n歷史間隔僅供參考，尚無可靠的下次重置時間推估")
+   :"尚無資料 · codex-reset.com";
  ($("mode") as HTMLSelectElement).value=mode;
  $("alarm").textContent=s.next?fdate(new Date(s.next.at*1000).toISOString())+" · "+s.next.reason:"尚未排程";
  $("schedule-preview").textContent=mode==="off"?"排程已關閉":mode==="auto"?"下一次以目前 quota reset 為基準":"下一錨點："+(s.next?fdate(new Date(s.next.at*1000).toISOString()):"尚未排程");
@@ -490,10 +495,10 @@ $("trigger").onclick=async()=>{
 };
 $("reset-action").onclick=()=>{
  const s=snapshot;if(!s)return;
- $("reset-dialog-title").textContent="Banked Reset ×"+(s.credits?.count??0)+(s.armed?" · 待命":"");
- const credits=activeCreditsByExpiry(s.credits?.available??[]);
- $("reset-dialog-desc").textContent="已用盡時可以立即重置，或選擇待命直到 5h／週配額任一用盡。也可以明確選擇重置部分已用配額。每次使用會消耗一個 Banked Reset。"+
-  (credits.length?"\n"+credits.map((c,i)=>(i+1)+". 到期 "+fdate(c.expires_at)+" · 剩 "+bankedCountdown(c.expires_at)).join("\n"):"");
+ $("reset-dialog-title").textContent="使用 Banked Reset（一次一張）";
+ const credit=nearestCredit(s.credits?.available??[]);
+ $("reset-dialog-desc").textContent="每次只使用最早到期的一張 Banked Reset。用盡時可立即重置、設定待命，或明確選擇重置部分用量。"+
+   (credit?"\n本次使用：到期 "+fdate(credit.expires_at)+" · 剩 "+bankedCountdown(credit.expires_at):"\n目前沒有有效的 Banked Reset");
  $("reset-arm").textContent=s.armed?"取消待命":"用盡後自動使用一次";
  ($("reset-exhausted") as HTMLButtonElement).disabled=!(s.usage?.five_hour===100||s.usage?.weekly===100||s.usage?.limit_reached);
  ($("reset-now") as HTMLButtonElement).disabled=!(!!s.usage?.five_hour||!!s.usage?.weekly);
