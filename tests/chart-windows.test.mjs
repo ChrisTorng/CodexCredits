@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {actualFiveHourWindows,observedQuotaWindows,scheduledFiveHourWindows,interruptAtNextReset,idealSegment,idealQuotaSegment,windowBoundaries,readableBoundaries,clockLabel,FIVE_HOUR_MS}
+import {actualFiveHourWindows,observedQuotaWindows,scheduledFiveHourWindows,historyScheduleGuides,eventConfirmedFiveHourWindows,interruptAtNextReset,idealSegment,idealQuotaSegment,windowBoundaries,readableBoundaries,clockLabel,FIVE_HOUR_MS}
  from "../src/chart-windows.ts";
 
 const iso=(t)=>new Date(t).toISOString();
@@ -106,4 +106,26 @@ test("two stable idle reset_at samples must not fabricate a 04:18 five-hour rese
  assert.deepEqual(actualFiveHourWindows(idle),[]);
  const used={at:iso(at+40*60_000),five_hour:4,five_reset:iso(end)};
  assert.equal(actualFiveHourWindows([...idle,used]).length,1);
+});
+
+test("history labels use the configured 06/11/16/21 anchors instead of 06/12/18",()=>{
+ const day=new Date("2026-11-04T00:00:00").getTime();
+ const guides=historyScheduleGuides([{enabled:true,hour:6,minute:0,auto_count:3}],day,day+86400000);
+ assert.deepEqual(guides.map(t=>new Date(t).getHours()),[6,11,16,21]);
+ const overridden=historyScheduleGuides([{enabled:true,hour:7,minute:30,auto_count:1}],day,day+86400000);
+ assert.deepEqual(overridden.map(t=>new Date(t).getHours()),[7,12]);
+ assert.deepEqual(historyScheduleGuides([],day,day+86400000),[]);
+});
+test("only a successful trigger provides event evidence, not scheduled future slots",()=>{
+ const at=Date.parse("2026-11-04T06:00:00Z"),now=at+6*3600000;
+ const events=[
+  {at:new Date(at).toISOString(),kind:"trigger",detail:"錨點觸發成功"},
+  {at:new Date(at+5*3600000).toISOString(),kind:"scheduler",detail:"排程設定"},
+  {at:new Date(now+3600000).toISOString(),kind:"trigger",detail:"手動觸發成功"}
+ ];
+ const observed=eventConfirmedFiveHourWindows(events,[],now);
+ assert.equal(observed.length,1);
+ assert.equal(observed[0].start,at);
+ assert.equal(observed[0].end,at+FIVE_HOUR_MS);
+ assert.deepEqual(eventConfirmedFiveHourWindows(events,[{start:at,end:at+FIVE_HOUR_MS,estimated:false}],now),[]);
 });
