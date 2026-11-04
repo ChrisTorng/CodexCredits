@@ -10,7 +10,7 @@ import {CanvasRenderer} from "echarts/renderers";
 echarts.use([LineChart,GridComponent,TooltipComponent,LegendComponent,TitleComponent,MarkLineComponent,GraphicComponent,CanvasRenderer]);
 import {actualFiveHourWindows,observedQuotaWindows,scheduledFiveHourWindows,interruptAtNextReset,idealSegment,idealQuotaSegment,windowBoundaries,readableBoundaries,clockLabel,FIVE_HOUR_MS} from "./chart-windows";
 import {buildHistoryFeed} from "./history-feed";
-import {nearestCredit,bankedCountdown,timelineTicks,historyFallbackTicks} from "./credit-ui";
+import {nearestCredit,activeCreditsByExpiry,bankedCountdown,chartTooltipPosition,quotaInteriorTicks,timelineTicks,historyFallbackTicks} from "./credit-ui";
 import "./style.css";
 
 type Mode="off"|"auto"|"custom";
@@ -24,9 +24,10 @@ type Sample={at:string;five_hour:number|null;weekly:number|null;five_reset:strin
 type Event={at:string;kind:string;detail:string};
 const $=(id:string)=>document.getElementById(id)!;
 const app=$("app");
+const appIcon=new URL("../src-tauri/icons/icon.ico",import.meta.url).href;
 app.innerHTML=[
-'<header class="app-header"><h1>Codex Credits</h1><button class="refresh-icon" id="top-refresh" title="更新配額">↻</button></header>',
-'<nav class="tabs" aria-label="功能選單"><button class="tab active" data-tab="status">● 狀態</button><button class="tab" data-tab="schedule">◷ 排程</button><button class="tab" data-tab="history">▥ 歷程</button><button class="tab" data-tab="settings">⚙ 設定</button></nav>',
+`<header class="app-header"><img class="brand-icon" src="${appIcon}" alt=""><h1>Codex Credits</h1><button class="refresh-icon" id="top-refresh" title="更新用量" aria-label="更新用量">↻</button></header>`
+'<nav class="tabs" aria-label="功能選單"><button class="tab narrow-tab active" data-tab="status">● 狀態</button><button class="tab narrow-tab" data-tab="history">▥ 歷程</button><button class="tab narrow-tab" data-tab="schedule">◷ 排程</button><button class="tab narrow-tab" data-tab="settings">⚙ 設定</button><button class="tab wide-tab active" data-group="usage">● 狀態與歷程</button><button class="tab wide-tab" data-group="planning">◷ 排程與設定</button></nav>',
 '<div class="content">',
 '<main class="page visible" id="page-status">',
 '<p id="account" class="account">ChatGPT 尚未登入</p>',
@@ -34,12 +35,12 @@ app.innerHTML=[
 '<section class="card quota"><div class="card-title"><strong>週配額</strong><strong id="weekly-percent">—</strong></div><div class="quota-chart" id="weekly-chart"></div></section>',
 '<section class="card compact"><h2>下一次排程</h2><p id="status-next">尚未排程</p></section>',
 '<p id="trigger-preview" class="note">請先登入</p>',
-'<div class="button-row"><button id="check" class="action">更新配額</button><button id="trigger" class="action">立即觸發</button></div>',
+'<div class="button-row"><button id="check" class="action">更新用量</button><button id="trigger" class="action" title="以最小 Codex 請求開始 5 小時用量視窗">開始 5h</button></div>',
 '<section class="card banked"><div class="card-title"><strong id="reset-title">Banked Reset</strong><button id="reset-action" class="banked-button">Banked Reset</button></div><div id="reset-expiry" class="meta"></div></section>',
 '<section class="card compact"><h2>Global Reset</h2><p id="global-reset">尚無資料 · codex-reset.com</p></section>',
 '</main>',
 '<main class="page" id="page-schedule">',
-'<h3>模式</h3><div class="button-row mode-row"><select id="mode"><option value="off">關閉</option><option value="auto">配額重置後自動觸發</option><option value="custom">錨點＋自動接續</option></select><button id="apply-mode">套用</button></div>',
+'<h3>模式</h3><div class="button-row mode-row"><select id="mode"><option value="off">關閉</option><option value="auto">配額重置後自動開始</option><option value="custom">錨點＋自動接續</option></select><button id="apply-mode">套用</button></div>',
 '<section class="card compact"><h2>下次執行</h2><p id="alarm">尚未排程</p></section>',
 '<section class="card compact"><h2>預估</h2><p id="schedule-preview">排程已關閉</p></section>',
 
@@ -106,6 +107,7 @@ let events:Event[]=[];
 let expandedHistory=false;
 let expandedSamples=false;
 let page="status";
+const wideLayout=matchMedia("(min-width: 940px)");
 let theme="system";
 let notificationPermission:boolean|null=null;
 let notificationPermissionError="";
@@ -164,19 +166,22 @@ const call=async<T>(name:string,args?:Record<string,unknown>):Promise<T>=>invoke
 function showPage(name:string){
  if(name!==page)closeToast();
  page=name;
- if(name==="settings"){void refreshNotificationPermission();void checkAlarmPolicy();}
+ const group=name==="status"||name==="history"?"usage":"planning";
+ const pages=wideLayout.matches?(group==="usage"?["status","history"]:["schedule","settings"]):[name];
+ if(pages.includes("settings")){void refreshNotificationPermission();void checkAlarmPolicy();}
  for(const btn of Array.from(document.querySelectorAll<HTMLButtonElement>(".tab"))){
-  const selected=btn.dataset.tab===name;
+  const selected=btn.dataset.group?btn.dataset.group===group:btn.dataset.tab===name;
   btn.classList.toggle("active",selected);btn.setAttribute("aria-selected",String(selected));
  }
  for(const item of Array.from(document.querySelectorAll<HTMLElement>(".page"))){
-  item.classList.toggle("visible",item.id==="page-"+name);
+  item.classList.toggle("visible",pages.includes(item.id.slice("page-".length)));
  }
  window.requestAnimationFrame(()=>{resizeVisibleCharts();draw();});
 }
 for(const btn of Array.from(document.querySelectorAll<HTMLButtonElement>(".tab"))){
- btn.onclick=()=>showPage(btn.dataset.tab??"status");
+ btn.onclick=()=>showPage(btn.dataset.tab??(btn.dataset.group==="planning"?"schedule":"status"));
 }
+wideLayout.addEventListener("change",()=>showPage(page));
 function applyTheme(value:string){
  theme=value;
  const dark=value==="dark"||(value==="system"&&matchMedia("(prefers-color-scheme: dark)").matches);
@@ -221,7 +226,7 @@ function paintQuota(id:string,used:number|null|undefined,reset:string|null|undef
   [{xAxis:expTime,lineStyle:{color:"#e05252",width:2,type:"dashed"},
     label:{show:true,formatter:"券到期",position:"insideEndTop",color:"#e05252",fontSize:10}}]:[];
  const ticks=valid?timelineTicks(start,until,weekly):[];
- const tickLabels=ticks.map(t=>({
+ const tickLabels=quotaInteriorTicks(ticks,start,until,chart.getWidth(),weekly).map(t=>({
   type:"text",silent:true,bottom:0,
   left:Math.max(3,Math.min(chart.getWidth()-38,5+(chart.getWidth()-10)*(t-start)/span-(weekly?14:9))),
   style:{text:weekly?new Date(t).toLocaleDateString("zh-TW",{month:"numeric",day:"numeric"}):
@@ -238,7 +243,10 @@ function paintQuota(id:string,used:number|null|undefined,reset:string|null|undef
   xAxis:{type:"time",min:valid?start:undefined,max:valid?until:undefined,
    axisLine:{show:false},splitLine:{show:!valid,lineStyle:{color:p.grid}},axisLabel:{show:!valid},axisTick:{show:false}},
   yAxis:{type:"value",min:0,max:100,interval:50,axisLabel:{show:false},axisLine:{show:false},axisTick:{show:false},splitLine:{lineStyle:{color:p.grid}}},
-  tooltip:{trigger:"axis",valueFormatter:(v:unknown)=>typeof v==="number"?Math.round(v)+"% 剩餘":String(v)},
+  tooltip:{trigger:"axis",confine:true,
+    position:(point:number[],_params:unknown,_dom:unknown,_rect:unknown,size:{viewSize:number[];contentSize:number[]})=>
+     chartTooltipPosition(point,size.viewSize,size.contentSize),
+    valueFormatter:(v:unknown)=>typeof v==="number"?Math.round(v)+"% 剩餘":String(v)},
   series:[
    {name:"理想剩餘",type:"line",data:ideal,showSymbol:false,silent:true,lineStyle:{color,type:"dashed",width:1.5,opacity:.8},areaStyle:{color,opacity:.08}},
    {name:"實際剩餘",type:"line",data:valid?actual:[],showSymbol:false,lineStyle:{width:2.4,color},itemStyle:{color},areaStyle:{color,opacity:.18},
@@ -300,11 +308,14 @@ function paintHistory(id:string,offset:number){
   legend:{data:palette.map(x=>x[0]),top:2,right:8,textStyle:{fontSize:10,color:p.text},itemWidth:12,itemHeight:3},
   grid:{left:5,right:5,top:24,bottom:20},
   xAxis:{type:"time",min:start,max:end,interval:6*3600000,
-   axisLabel:{show:boundaries.length===0,fontSize:9,color:p.text,hideOverlap:true,
+   axisLabel:{show:false,fontSize:9,color:p.text,hideOverlap:true,
     formatter:(v:number)=>clockLabel(v)},
    axisLine:{show:false},splitLine:{show:boundaries.length===0,lineStyle:{color:p.grid}},axisTick:{show:false}},
   yAxis:{type:"value",min:0,max:100,interval:50,axisLabel:{show:false},axisLine:{show:false},splitLine:{lineStyle:{color:p.grid}}},
-  tooltip:{trigger:"axis",valueFormatter:(value:unknown)=>typeof value==="number"?Math.round(value)+"% 剩餘":String(value)},
+  tooltip:{trigger:"axis",confine:true,
+    position:(point:number[],_params:unknown,_dom:unknown,_rect:unknown,size:{viewSize:number[];contentSize:number[]})=>
+     chartTooltipPosition(point,size.viewSize,size.contentSize),
+    valueFormatter:(value:unknown)=>typeof value==="number"?Math.round(value)+"% 剩餘":String(value)},
   series:[
    ...windows.map(w=>({
     name:w.estimated?"5 小時預估理想":"5 小時理想",type:"line",data:idealSegment(w,start,end),
@@ -324,12 +335,12 @@ function paintHistory(id:string,offset:number){
 }
 function draw(){
  if(!snapshot)return;
- if(page==="status"){
+ if($("page-status").classList.contains("visible")){
   const u=snapshot.usage;
   paintQuota("primary-chart",u?.five_hour,u?.five_reset,false,!!u?.primary_confirmed);
   paintQuota("weekly-chart",u?.weekly,u?.weekly_reset,true,true);
  }
- if(page==="history"){
+ if($("page-history").classList.contains("visible")){
   paintHistory("yesterday-chart",-1);paintHistory("today-chart",0);
  }
 }
@@ -349,17 +360,17 @@ function render(){
  const stale=!Number.isFinite(checkedAt)||checkedAt<=0||Date.now()-checkedAt>15*60000;
  $("trigger-preview").textContent=!s.signed_in?"請先登入":
    stale?"正在取得最新配額…":
-   confirmed?"5h 進行中 · 可再開始："+fdate(u?.five_reset):
-   "可立即觸發 · 預估重置 "+fdate(new Date(Date.now()+5*3600000).toISOString());
+   confirmed?"5h 進行中 · 下次可開始："+fdate(u?.five_reset):
+   "可立即開始 5h · 預估重置 "+fdate(new Date(Date.now()+5*3600000).toISOString());
  ($("trigger") as HTMLButtonElement).disabled=!s.signed_in||stale||confirmed||!u?.allowed||u?.weekly===100;
  const credits=s.credits;const available=credits?.count??0;
  $("reset-title").textContent="Banked Reset ×"+available+(s.armed?" · 待命":"");
  $("reset-action").textContent="Banked Reset ×"+available+(s.armed?" · 待命":"");
  ($("reset-action") as HTMLButtonElement).hidden=available<=0&&!s.armed;
- const first=nearestCredit(credits?.available??[]);
- const expiry=first?.expires_at;
- $("reset-expiry").textContent=(s.armed?"用盡後自動重置 · ":"")+
-  (expiry?"最近到期 "+fdate(expiry)+" · 剩 "+bankedCountdown(expiry):"目前沒有有效的 Banked Reset");
+ const active=activeCreditsByExpiry(credits?.available??[]);
+ $("reset-expiry").textContent=(s.armed?"用盡後自動重置\n":"")+
+  (active.length?active.map((c,i)=>(i+1)+". 到期 "+fdate(c.expires_at)+" · 剩 "+bankedCountdown(c.expires_at)).join("\n"):
+   "目前沒有有效的 Banked Reset");
  const global=s.global;
  $("global-reset").textContent=global?.last_reset_at?
   "上次 "+fdate(global.last_reset_at)+(global.age_days!=null?" · 已 "+global.age_days.toFixed(1)+" 天":"")+
@@ -472,16 +483,16 @@ document.addEventListener("visibilitychange",()=>{if(!document.hidden)void refre
 window.addEventListener("focus",()=>{void refreshIfStale();});
 $("top-refresh").onclick=refresh;$("check").onclick=refresh;
 $("trigger").onclick=async()=>{
- if(!confirm("將發送最小 Codex 請求，可能消耗配額。確定立即觸發？"))return;
- try{await call("manual_trigger");toast("手動觸發成功");await refresh();}
- catch(e){toast("手動觸發失敗："+String(e));}
+ if(!confirm("將發送最小 Codex 請求以開始 5 小時視窗，可能消耗用量。確定開始？"))return;
+ try{await call("manual_trigger");toast("5h 已開始");await refresh();}
+ catch(e){toast("5h 開始失敗："+String(e));}
 };
 $("reset-action").onclick=()=>{
  const s=snapshot;if(!s)return;
  $("reset-dialog-title").textContent="Banked Reset ×"+(s.credits?.count??0)+(s.armed?" · 待命":"");
- const nearest=nearestCredit(s.credits?.available??[]);
+ const credits=activeCreditsByExpiry(s.credits?.available??[]);
  $("reset-dialog-desc").textContent="已用盡時可以立即重置，或選擇待命直到 5h／週配額任一用盡。也可以明確選擇重置部分已用配額。每次使用會消耗一個 Banked Reset。"+
-  (nearest?"\n最近到期："+fdate(nearest.expires_at)+" · 剩 "+bankedCountdown(nearest.expires_at):"");
+  (credits.length?"\n"+credits.map((c,i)=>(i+1)+". 到期 "+fdate(c.expires_at)+" · 剩 "+bankedCountdown(c.expires_at)).join("\n"):"");
  $("reset-arm").textContent=s.armed?"取消待命":"用盡後自動使用一次";
  ($("reset-exhausted") as HTMLButtonElement).disabled=!(s.usage?.five_hour===100||s.usage?.weekly===100||s.usage?.limit_reached);
  ($("reset-now") as HTMLButtonElement).disabled=!(!!s.usage?.five_hour||!!s.usage?.weekly);
