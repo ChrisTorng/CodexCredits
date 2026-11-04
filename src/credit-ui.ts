@@ -11,8 +11,9 @@ export function nearestCredit<T extends CreditExpiry>(items:readonly T[],now=Dat
 export function compactLocalDateTime(iso:string|null|undefined):string{
  if(!iso)return "—";
  const date=new Date(iso);
- return Number.isFinite(date.getTime())?
-  date.toLocaleString("zh-TW",{month:"numeric",day:"numeric",hour:"2-digit",minute:"2-digit",hour12:false}):"—";
+ if(!Number.isFinite(date.getTime()))return "—";
+ const hh=String(date.getHours()).padStart(2,"0"),mm=String(date.getMinutes()).padStart(2,"0");
+ return (date.getMonth()+1)+"/"+date.getDate()+" "+hh+":"+mm;
 }
 /** Prefer left of the pointer, flip to the right if necessary, and stay within chart. */
 export function chartTooltipPosition(point:readonly number[],view:readonly number[],box:readonly number[]):[number,number]{
