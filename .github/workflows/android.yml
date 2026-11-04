@@ -8,6 +8,8 @@ on:
       - 'mobile/**'
       - 'package.json'
       - '.github/workflows/android.yml'
+  pull_request:
+    branches: [main]
   workflow_dispatch:
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
