@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="none">
+<!-- Transparent original Android identity: gold upper-right, cyan lower-left. -->
+<path d="M94.97 50.97 A75 75 0 1 1 175.61 173.54" stroke="#E6B433" stroke-width="20" stroke-linecap="round"/>
+<path d="M178.04 186.31 A75 75 0 1 1 77.30 88.91" stroke="#2CB7C6" stroke-width="20" stroke-linecap="round"/>
+<circle cx="148" cy="104" r="16" fill="#E6B433"/>
+<circle cx="109" cy="157" r="16" fill="#2CB7C6"/>
+</svg>
