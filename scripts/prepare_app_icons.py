@@ -2,7 +2,6 @@
 """Build transparent, high-resolution Android/Windows icons from shared brand.svg geometry."""
 from pathlib import Path
 from PIL import Image, ImageDraw
-import math
 
 ROOT = Path("src-tauri/icons")
 SIZE = 1024
@@ -19,11 +18,6 @@ def arc(cx, cy, radius, start, end, color):
     box = (cx-radius, cy-radius, cx+radius, cy+radius)
     draw.arc((*pt(box[0],box[1]), *pt(box[2],box[3])),
              start=start, end=end, fill=color, width=round(20*SCALE))
-    for angle in (start,end):
-        x = cx+radius*math.cos(math.radians(angle))
-        y = cy+radius*math.sin(math.radians(angle))
-        r=10
-        draw.ellipse((*pt(x-r,y-r), *pt(x+r,y+r)), fill=color)
 
 # Angles are clockwise in image coordinates. No white tile/background.
 arc(148,104,75,225,428,GOLD)
