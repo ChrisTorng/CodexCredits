@@ -2,6 +2,9 @@
 ; and uninstall registry key. Only customize the user-visible display name.
 !macro NSIS_HOOK_POSTINSTALL
   WriteRegStr SHCTX "${UNINSTKEY}" "DisplayName" "Codex Credits"
+  ; Refresh Explorer's cached icons after an in-place binary replacement.
+  ; Does not affect settings or the app's SQLite history.
+  System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, p 0, p 0)'
   !if "${STARTMENUFOLDER}" != ""
     ${If} ${FileExists} "$SMPROGRAMS\$AppStartMenuFolder\${PRODUCTNAME}.lnk"
       Delete "$SMPROGRAMS\$AppStartMenuFolder\Codex Credits.lnk"
