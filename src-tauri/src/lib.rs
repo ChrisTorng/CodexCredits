@@ -160,6 +160,7 @@ async fn refresh_internal(s:&State,force_aux:bool)->Result<api::Usage,String>{
  {
   let db=s.db.lock().unwrap();
   storage::add_sample(&db,value.five_hour,value.weekly,value.five_reset.as_deref(),value.weekly_reset.as_deref())?;
+   storage::save_cached(&db,"last_usage",&value)?;
   let _=storage::cleanup(&db,s.settings.lock().unwrap().retention_days);
  }
  *s.usage.lock().unwrap()=Some(value.clone());
@@ -177,7 +178,8 @@ async fn refresh_internal(s:&State,force_aux:bool)->Result<api::Usage,String>{
       record(s,"banked_reset","待命的 Banked Reset 已不可用，取消待命");
      }
     }
-    *s.credits.lock().unwrap()=Some(c);
+    let _=storage::save_cached(&s.db.lock().unwrap(),"last_credits",&c);
+     *s.credits.lock().unwrap()=Some(c);
     *s.last_credits.lock().unwrap()=now();
    }
    Err(e)=>record(s,"warning",&format!("Banked Reset 查詢失敗: {e}")),
@@ -195,7 +197,8 @@ async fn refresh_internal(s:&State,force_aux:bool)->Result<api::Usage,String>{
      let _=legacy::sync_native(&db);
      let _=storage::reconcile_global_resets(&db,&verified);
     }
-    *s.global.lock().unwrap()=Some(value);
+    let _=storage::save_cached(&s.db.lock().unwrap(),"last_global",&value);
+     *s.global.lock().unwrap()=Some(value);
     *s.last_global.lock().unwrap()=now();
    }
    Err(_)=>{*s.last_global.lock().unwrap()=now();}
@@ -503,12 +506,16 @@ pub fn run(){
   #[cfg(target_os="android")]
   let migration_error=legacy::import(&db).err();
   let settings=storage::get_settings(&db);
+  // Restore last known quota before OAuth or any network call.
+  let cached_usage=storage::restore_usage(&db);
+  let cached_credits=storage::get_cached::<api::Credits>(&db,"last_credits");
+  let cached_global=storage::get_cached::<api::Global>(&db,"last_global");
   let armed=storage::get_meta(&db,"banked_armed");
   #[cfg(target_os="android")]
   let armed=if android_bridge::banked_armed().unwrap_or(false){Some("android-native".into())}else{armed};
   let state=Arc::new(State{
-   app:handle.clone(),db:Mutex::new(db),settings:Mutex::new(settings),usage:Mutex::new(None),
-   credits:Mutex::new(None),global:Mutex::new(None),last_credits:Mutex::new(0),last_global:Mutex::new(0),
+   app:handle.clone(),db:Mutex::new(db),settings:Mutex::new(settings),usage:Mutex::new(cached_usage),
+   credits:Mutex::new(cached_credits),global:Mutex::new(cached_global),last_credits:Mutex::new(0),last_global:Mutex::new(0),
    ntfy_status:Mutex::new("尚未測試".into()),armed:Mutex::new(armed),
    engine:Mutex::new(engine::Engine::default()),error:Mutex::new({
     #[cfg(target_os="android")] {migration_error}
