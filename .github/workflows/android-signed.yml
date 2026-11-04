@@ -52,17 +52,10 @@ jobs:
           ACTUAL=$(keytool -list -v -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey |
             grep -m1 'SHA256:' | sed -E 's/.*SHA256:[[:space:]]*//' | tr -d ':' | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')
           test "$ACTUAL" = "$EXPECTED" || { echo "::error::Android signer does not match the installed app"; exit 1; }
-      - name: Generate app icons
+      - name: Generate transparent app icon from shared source
         run: |
           python3 -m pip install --quiet Pillow
-          python3 - <<'PY'
-          from PIL import Image
-          from pathlib import Path
-          p=Path("src-tauri/icons")
-          src=Image.open(p/"icon.ico").convert("RGBA")
-          for name,size in (("icon.png",512),("128x128.png",128),("32x32.png",32)):
-              src.resize((size,size),Image.Resampling.LANCZOS).save(p/name)
-          PY
+          python3 scripts/prepare_app_icons.py
       - run: npm install
       - run: npm run test:charts
       - run: python3 mobile/android/check_branding.py
