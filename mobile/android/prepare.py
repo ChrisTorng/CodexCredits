@@ -93,6 +93,20 @@ if strings.is_file():
         if entry.get("name")=="app_name":
             entry.text="Codex Credits"
     values.write(strings,encoding="utf-8",xml_declaration=True)
+# Tauri's adaptive launcher template may impose a white background even when
+# the source icon PNG has transparent corners. Keep the two colored loops free
+# of the unwanted white square in Android launcher/App info.
+res=project/"src/main/res"
+if res.exists():
+    for launcher in res.glob("mipmap-anydpi*/ic_launcher*.xml"):
+        adaptive=ET.parse(launcher)
+        if adaptive.getroot().tag!="adaptive-icon":
+            continue
+        background=adaptive.getroot().find("background")
+        if background is not None:
+            background.set(A("drawable"),"@android:color/transparent")
+            adaptive.write(launcher,encoding="utf-8",xml_declaration=True)
+
 app.set(A("allowBackup"),"false")
 app.set(A("usesCleartextTraffic"),"true")
 for name in ("AlarmReceiver","BootReceiver"):
