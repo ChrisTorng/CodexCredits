@@ -26,7 +26,7 @@ const $=(id:string)=>document.getElementById(id)!;
 const app=$("app");
 const appIcon=new URL("../src-tauri/icons/icon.ico",import.meta.url).href;
 app.innerHTML=[
-`<header class="app-header"><img class="brand-icon" src="${appIcon}" alt=""><h1>Codex Credits</h1><button class="refresh-icon" id="top-refresh" title="更新用量" aria-label="更新用量">↻</button></header>`
+`<header class="app-header"><img class="brand-icon" src="${appIcon}" alt=""><h1>Codex Credits</h1><button class="refresh-icon" id="top-refresh" title="更新用量" aria-label="更新用量">↻</button></header>`,
 '<nav class="tabs" aria-label="功能選單"><button class="tab narrow-tab active" data-tab="status">● 狀態</button><button class="tab narrow-tab" data-tab="history">▥ 歷程</button><button class="tab narrow-tab" data-tab="schedule">◷ 排程</button><button class="tab narrow-tab" data-tab="settings">⚙ 設定</button><button class="tab wide-tab active" data-group="usage">● 狀態與歷程</button><button class="tab wide-tab" data-group="planning">◷ 排程與設定</button></nav>',
 '<div class="content">',
 '<main class="page visible" id="page-status">',
