@@ -37,6 +37,13 @@ jobs:
       - run: npm run tauri build -- --no-bundle
       - name: Build Windows NSIS installer for native notifications
         run: npm run tauri bundle -- --bundles nsis
+      - name: Verify Windows small/large icons inside EXE and installer
+        shell: pwsh
+        run: |
+          python -m pip install --quiet pefile
+          $installer = @(Get-ChildItem src-tauri/target/release/bundle/nsis -Filter '*-setup.exe')
+          if ($installer.Count -ne 1) { throw "Expected exactly one Windows installer" }
+          python scripts/verify_windows_icons.py src-tauri/target/release/CodexCredits.exe $installer[0].FullName
       - name: Stage portable files
         shell: pwsh
         run: |

@@ -25,6 +25,29 @@ pub fn set_meta(db:&Connection,key:&str,value:Option<&str>)->Result<(),String>{
  }
  Ok(())
 }
+pub fn get_cached<T:serde::de::DeserializeOwned>(db:&Connection,key:&str)->Option<T>{
+ get_meta(db,key).and_then(|v|serde_json::from_str::<T>(&v).ok())
+}
+pub fn save_cached<T:serde::Serialize>(db:&Connection,key:&str,value:&T)->Result<(),String>{
+ let raw=serde_json::to_string(value).map_err(|e|e.to_string())?;
+ set_meta(db,key,Some(&raw))
+}
+/// Instant first paint: older releases stored samples, not the account snapshot.
+pub fn restore_usage(db:&Connection)->Option<crate::api::Usage>{
+ if let Some(cached)=get_cached::<crate::api::Usage>(db,"last_usage"){return Some(cached)}
+ let (at,five_hour,weekly,five_reset,weekly_reset):(
+   String,Option<f64>,Option<f64>,Option<String>,Option<String>)=
+  db.query_row("SELECT at,five_hour,weekly,five_reset,weekly_reset FROM samples ORDER BY julianday(at) DESC,id DESC LIMIT 1",
+   [],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).ok()?;
+ let stamp=chrono::DateTime::parse_from_rfc3339(&at).ok()?.timestamp();
+ let confirmed=five_hour.is_some_and(|v|v>0.0001)&&
+  five_reset.as_deref().and_then(|v|chrono::DateTime::parse_from_rfc3339(v).ok())
+   .is_some_and(|r|r.timestamp()>stamp&&r.timestamp()<=stamp+5*3600+60);
+ // These values are a previous observation, not permission to trigger.
+ Some(crate::api::Usage{five_hour,weekly,five_reset,weekly_reset,checked_at:at,
+  plan:"—".into(),allowed:false,limit_reached:false,primary_confirmed:confirmed})
+}
+
 pub fn get_settings(db:&Connection)->Settings{
  db.query_row("SELECT value FROM kv WHERE key='settings'",[],|r|r.get::<_,String>(0))
   .ok().and_then(|x|serde_json::from_str(&x).ok()).unwrap_or_default()
@@ -100,6 +123,21 @@ pub fn events(db:&Connection)->Result<Vec<serde_json::Value>,String>{
 }
 #[cfg(test)]mod tests{
  use super::*;
+ #[test]fn previous_sample_restores_quota_before_first_online_refresh(){
+  let path=std::env::temp_dir().join(format!("codexcredits-restore-{}.sqlite3",uuid::Uuid::new_v4()));
+  let db=open(&path).unwrap();
+  assert!(restore_usage(&db).is_none());
+  add_sample(&db,Some(24.),Some(41.),None,Some("2026-11-12T00:00:00Z")).unwrap();
+  let previous=restore_usage(&db).unwrap();
+  assert_eq!(previous.five_hour,Some(24.));
+  assert_eq!(previous.weekly,Some(41.));
+  assert!(!previous.primary_confirmed);
+  assert!(!previous.allowed);
+  let mut exact=previous.clone();exact.plan="plus".into();exact.allowed=true;
+  save_cached(&db,"last_usage",&exact).unwrap();
+  assert_eq!(restore_usage(&db).unwrap().plan,"plus");
+  drop(db);let _=std::fs::remove_file(path);
+ }
  #[test]fn persisted_history_survives_reopening_database(){
   let path=std::env::temp_dir().join(format!("codexcredits-history-test-{}.sqlite3",uuid::Uuid::new_v4()));
   {

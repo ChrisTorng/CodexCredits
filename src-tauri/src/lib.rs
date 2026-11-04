@@ -51,6 +51,15 @@ struct Snapshot{
  error:Option<String>,
  signed_in:bool,
 }
+#[cfg(target_os="windows")]
+fn refresh_windows_icon_cache(){
+ // Refresh old 16px portable EXE icons retained by Windows Explorer.
+ #[link(name="shell32")]
+ unsafe extern "system" {
+  fn SHChangeNotify(event_id:i32,flags:u32,item1:*const std::ffi::c_void,item2:*const std::ffi::c_void);
+ }
+ unsafe{SHChangeNotify(0x08000000,0,std::ptr::null(),std::ptr::null());}
+}
 fn now()->i64{chrono::Utc::now().timestamp()}
 fn token()->Result<String,String>{credentials::load()}
 #[cfg(target_os="android")]
@@ -160,6 +169,7 @@ async fn refresh_internal(s:&State,force_aux:bool)->Result<api::Usage,String>{
  {
   let db=s.db.lock().unwrap();
   storage::add_sample(&db,value.five_hour,value.weekly,value.five_reset.as_deref(),value.weekly_reset.as_deref())?;
+   storage::save_cached(&db,"last_usage",&value)?;
   let _=storage::cleanup(&db,s.settings.lock().unwrap().retention_days);
  }
  *s.usage.lock().unwrap()=Some(value.clone());
@@ -177,7 +187,8 @@ async fn refresh_internal(s:&State,force_aux:bool)->Result<api::Usage,String>{
       record(s,"banked_reset","待命的 Banked Reset 已不可用，取消待命");
      }
     }
-    *s.credits.lock().unwrap()=Some(c);
+    let _=storage::save_cached(&s.db.lock().unwrap(),"last_credits",&c);
+     *s.credits.lock().unwrap()=Some(c);
     *s.last_credits.lock().unwrap()=now();
    }
    Err(e)=>record(s,"warning",&format!("Banked Reset 查詢失敗: {e}")),
@@ -195,7 +206,8 @@ async fn refresh_internal(s:&State,force_aux:bool)->Result<api::Usage,String>{
      let _=legacy::sync_native(&db);
      let _=storage::reconcile_global_resets(&db,&verified);
     }
-    *s.global.lock().unwrap()=Some(value);
+    let _=storage::save_cached(&s.db.lock().unwrap(),"last_global",&value);
+     *s.global.lock().unwrap()=Some(value);
     *s.last_global.lock().unwrap()=now();
    }
    Err(_)=>{*s.last_global.lock().unwrap()=now();}
@@ -503,12 +515,16 @@ pub fn run(){
   #[cfg(target_os="android")]
   let migration_error=legacy::import(&db).err();
   let settings=storage::get_settings(&db);
+  // Restore last known quota before OAuth or any network call.
+  let cached_usage=storage::restore_usage(&db);
+  let cached_credits=storage::get_cached::<api::Credits>(&db,"last_credits");
+  let cached_global=storage::get_cached::<api::Global>(&db,"last_global");
   let armed=storage::get_meta(&db,"banked_armed");
   #[cfg(target_os="android")]
   let armed=if android_bridge::banked_armed().unwrap_or(false){Some("android-native".into())}else{armed};
   let state=Arc::new(State{
-   app:handle.clone(),db:Mutex::new(db),settings:Mutex::new(settings),usage:Mutex::new(None),
-   credits:Mutex::new(None),global:Mutex::new(None),last_credits:Mutex::new(0),last_global:Mutex::new(0),
+   app:handle.clone(),db:Mutex::new(db),settings:Mutex::new(settings),usage:Mutex::new(cached_usage),
+   credits:Mutex::new(cached_credits),global:Mutex::new(cached_global),last_credits:Mutex::new(0),last_global:Mutex::new(0),
    ntfy_status:Mutex::new("尚未測試".into()),armed:Mutex::new(armed),
    engine:Mutex::new(engine::Engine::default()),error:Mutex::new({
     #[cfg(target_os="android")] {migration_error}
@@ -531,6 +547,15 @@ pub fn run(){
    .clone();
   if let Some(window)=app.get_webview_window("main"){
    window.set_icon(icon.clone())?;
+  }
+  #[cfg(target_os="windows")]
+  {
+   let key=concat!("icon_cache_refreshed_",env!("CARGO_PKG_VERSION"));
+   let db=state.db.lock().unwrap();
+   if storage::get_meta(&db,key).is_none(){
+    refresh_windows_icon_cache();
+    let _=storage::set_meta(&db,key,Some("1"));
+   }
   }
   TrayIconBuilder::with_id("quota").icon(tray_status::icon(None,now())).tooltip("Codex Credits · 正在取得配額").show_menu_on_left_click(false).menu(&menu)
    .on_tray_icon_event(|tray,event|{

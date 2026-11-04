@@ -42,3 +42,8 @@ This is the **only maintained** repository for the cross-platform Codex Credits 
 - The status card lists every available Banked Reset by expiry. The action uses **one** credit and the dialog describes only the earliest-expiring credit; backend redemption must select that same credit, irrespective of API list order.
 - Global Reset forecasts that are already in the past are not future predictions. Do not show stale 24h/48h percentages; clearly distinguish observed elapsed time from historical average/median.
 - History chart guide times follow the effective daily schedule and configured 5-hour continuations. Plot ideal five-hour lines only for confirmed quota windows or recorded successful triggers, not unexecuted scheduled future windows.
+
+## Windows installation and instant startup
+- Keep the Windows executable and NSIS installer icons aligned with the transparent original twin-loop artwork. Run `scripts/verify_windows_icons.py` against the actual built PE files to check their embedded **16px and 32px** images, not just Explorer's large thumbnail. Explicitly brand NSIS `installerIcon` and `uninstallerIcon`.
+- An existing NSIS installation of an older version must upgrade **in place**; do not make uninstall-first the default. Keep the same bundle identifier, install directory, shortcuts, uninstall key and saved `app_data_dir/codexcredits.sqlite3`. Never remove user settings/history as part of an upgrade.
+- On cold start, restore the latest SQLite sample/snapshot and display status/history immediately. Begin online quota refresh in the background and append the new observation when it arrives. Clearly mark restored data as an older sample until refreshed, and block usage actions on stale data.
