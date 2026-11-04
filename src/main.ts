@@ -10,7 +10,7 @@ import {CanvasRenderer} from "echarts/renderers";
 echarts.use([LineChart,GridComponent,TooltipComponent,LegendComponent,TitleComponent,MarkLineComponent,GraphicComponent,CanvasRenderer]);
 import {actualFiveHourWindows,observedQuotaWindows,scheduledFiveHourWindows,interruptAtNextReset,idealSegment,idealQuotaSegment,windowBoundaries,readableBoundaries,clockLabel,FIVE_HOUR_MS} from "./chart-windows";
 import {buildHistoryFeed} from "./history-feed";
-import {nearestCredit,activeCreditsByExpiry,bankedCountdown,chartTooltipPosition,quotaInteriorTicks,timelineTicks,historyFallbackTicks} from "./credit-ui";
+import {nearestCredit,activeCreditsByExpiry,compactLocalDateTime,bankedCountdown,chartTooltipPosition,quotaInteriorTicks,timelineTicks,historyFallbackTicks} from "./credit-ui";
 import "./style.css";
 
 type Mode="off"|"auto"|"custom";
@@ -126,7 +126,7 @@ const getChart=(id:string)=>charts[id]??(charts[id]=echarts.init($(id),undefined
 const resizeVisibleCharts=()=>{for(const id of chartIds){if($(id).getClientRects().length)charts[id]?.resize();}};
 const safeRemaining=(used:number|null|undefined)=>used==null?null:Math.max(0,Math.min(100,100-used));
 const percent=(used:number|null|undefined)=>{const n=safeRemaining(used);return n==null?"—":Math.round(n)+"% 剩餘"};
-const fdate=(s:string|null|undefined)=>s?new Date(s).toLocaleString("zh-TW",{month:"numeric",day:"numeric",hour:"2-digit",minute:"2-digit",hour12:false}):"—";
+const fdate=compactLocalDateTime;
 const ftime=(s:string|null|undefined)=>s?new Date(s).toLocaleTimeString("zh-TW",{hour:"2-digit",minute:"2-digit",hour12:false}):"—";
 const today=(offset=0)=>{const d=new Date();d.setDate(d.getDate()+offset);return [d.getFullYear(),String(d.getMonth()+1).padStart(2,"0"),String(d.getDate()).padStart(2,"0")].join("-")};
 const hhmm=(r:Rule)=>String(r.hour).padStart(2,"0")+":"+String(r.minute).padStart(2,"0");
