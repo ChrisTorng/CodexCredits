@@ -512,7 +512,7 @@ pub fn run(){
   app.manage(state.clone());
   #[cfg(desktop)]
   {
-  let show=MenuItem::with_id(app,"show","開啟 Credit Codex",true,None::<&str>)?;
+  let show=MenuItem::with_id(app,"show","開啟 Codex Credits",true,None::<&str>)?;
   let quit=MenuItem::with_id(app,"quit","結束並停止監測",true,None::<&str>)?;
   let separator=PredefinedMenuItem::separator(app)?;
   let menu=Menu::with_items(app,&[&show,&separator,&quit])?;
