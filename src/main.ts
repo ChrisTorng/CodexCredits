@@ -10,6 +10,7 @@ import {CanvasRenderer} from "echarts/renderers";
 echarts.use([LineChart,GridComponent,TooltipComponent,LegendComponent,TitleComponent,MarkLineComponent,GraphicComponent,CanvasRenderer]);
 import {actualFiveHourWindows,observedQuotaWindows,eventConfirmedFiveHourWindows,historyScheduleGuides,interruptAtNextReset,idealSegment,idealQuotaSegment,windowBoundaries,readableBoundaries,clockLabel,FIVE_HOUR_MS} from "./chart-windows";
 import {buildHistoryFeed} from "./history-feed";
+import {globalResetSummary} from "./global-reset-ui";
 import {nearestCredit,activeCreditsByExpiry,compactLocalDateTime,bankedCountdown,chartTooltipPosition,quotaInteriorTicks,timelineTicks,historyFallbackTicks} from "./credit-ui";
 import "./style.css";
 
@@ -374,16 +375,7 @@ function render(){
   (active.length?active.map((c,i)=>(i+1)+". 到期 "+fdate(c.expires_at)+" · 剩 "+bankedCountdown(c.expires_at)).join("\n"):
    "目前沒有有效的 Banked Reset");
  const global=s.global;
- const lastReset=global?.last_reset_at?Date.parse(global.last_reset_at):NaN;
- const age=Number.isFinite(lastReset)?Math.max(0,(Date.now()-lastReset)/86400000):null;
- const overdue=age!=null&&global?.median_days!=null&&age>global.median_days;
- $("global-reset").textContent=global?.last_reset_at?
-   "上次 "+fdate(global.last_reset_at)+(age!=null?" · 已 "+age.toFixed(1)+" 天":"")+
-   (global.median_days!=null&&global.avg_days!=null?
-     "\n近期間隔 平均 "+global.avg_days.toFixed(1)+" 天 / 中位數 "+global.median_days.toFixed(1)+" 天":"")+
-   (overdue?"\n已超過近期中位數；無可靠的剩餘時間推估，下一次可能隨時發生":
-     "\n歷史間隔僅供參考，尚無可靠的下次重置時間推估")
-   :"尚無資料 · codex-reset.com";
+ $("global-reset").textContent=globalResetSummary(global);
  ($("mode") as HTMLSelectElement).value=mode;
  $("alarm").textContent=s.next?fdate(new Date(s.next.at*1000).toISOString())+" · "+s.next.reason:"尚未排程";
  $("schedule-preview").textContent=mode==="off"?"排程已關閉":mode==="auto"?"下一次以目前 quota reset 為基準":"下一錨點："+(s.next?fdate(new Date(s.next.at*1000).toISOString()):"尚未排程");
