@@ -51,6 +51,15 @@ struct Snapshot{
  error:Option<String>,
  signed_in:bool,
 }
+#[cfg(target_os="windows")]
+fn refresh_windows_icon_cache(){
+ // Refresh old 16px portable EXE icons retained by Windows Explorer.
+ #[link(name="shell32")]
+ unsafe extern "system" {
+  fn SHChangeNotify(event_id:i32,flags:u32,item1:*const std::ffi::c_void,item2:*const std::ffi::c_void);
+ }
+ unsafe{SHChangeNotify(0x08000000,0,std::ptr::null(),std::ptr::null());}
+}
 fn now()->i64{chrono::Utc::now().timestamp()}
 fn token()->Result<String,String>{credentials::load()}
 #[cfg(target_os="android")]
@@ -538,6 +547,15 @@ pub fn run(){
    .clone();
   if let Some(window)=app.get_webview_window("main"){
    window.set_icon(icon.clone())?;
+  }
+  #[cfg(target_os="windows")]
+  {
+   let key=concat!("icon_cache_refreshed_",env!("CARGO_PKG_VERSION"));
+   let db=state.db.lock().unwrap();
+   if storage::get_meta(&db,key).is_none(){
+    refresh_windows_icon_cache();
+    let _=storage::set_meta(&db,key,Some("1"));
+   }
   }
   TrayIconBuilder::with_id("quota").icon(tray_status::icon(None,now())).tooltip("Codex Credits · 正在取得配額").show_menu_on_left_click(false).menu(&menu)
    .on_tray_icon_event(|tray,event|{
