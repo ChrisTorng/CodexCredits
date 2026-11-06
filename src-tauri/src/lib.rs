@@ -289,10 +289,13 @@ async fn trigger(s:&State,followups:u8,kind:&str)->Result<(),String>{
 async fn consume(s:&State,allow_partial:bool,selected:Option<String>)->Result<(),String>{
  let _action=s.action.lock().await;
  let current=refresh_internal(s,true).await?;
- let used=engine::exhausted(&current)||current.five_hour.is_some_and(|v|v>0.)
-  ||current.weekly.is_some_and(|v|v>0.);
- if !(if allow_partial{used}else{engine::exhausted(&current)}){
-  return Err((if allow_partial{"配額尚未使用，不需要重置"}else{"5h 與週配額尚未用盡"}).into());
+ // Always re-check the server's latest quota before redemption, even if
+ // the UI previously showed an eligible state. 100%/98% must not be redeemed.
+ if !api::banked_reset_eligible(&current){
+  return Err("目前不需要重置：OpenAI 規定至少一項適用配額剩餘低於 80% 才能使用 Banked Reset（Your usage does not need a reset right now）".into());
+ }
+ if !allow_partial&&!engine::exhausted(&current){
+  return Err("配額尚未用盡；如要提早重置，請選擇「立即使用（含部分用量）」".into());
  }
  let access=oauth::valid_access().await?;
  let c=api::fetch_credits(&access.token,access.account_id.as_deref()).await?;
@@ -306,7 +309,7 @@ async fn consume(s:&State,allow_partial:bool,selected:Option<String>)->Result<()
   .ok_or("目前沒有有效的 Banked Reset")?;
  if c.count<=0{return Err("Banked Reset 可用次數為 0".into())}
  let windows=api::consume_credit(&access.token,access.account_id.as_deref(),&credit.id).await?;
- if windows<=0{return Err("伺服器未重置任何配額視窗".into())}
+ if windows<=0{return Err("OpenAI 未確認重置任何配額視窗；請重新整理官方 Usage 確認 Banked Reset 仍在，避免重複嘗試".into())}
  *s.armed.lock().unwrap()=None;
  storage::set_meta(&s.db.lock().unwrap(),"banked_armed",None)?;
  tokio::time::sleep(Duration::from_secs(1)).await;

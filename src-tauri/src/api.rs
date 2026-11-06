@@ -15,6 +15,14 @@ pub struct Usage {
  pub weekly_reset:Option<String>,pub plan:String,pub allowed:bool,pub limit_reached:bool,
  pub primary_confirmed:bool,pub checked_at:String,
 }
+/** Server-side guard for OpenAI banked reset redemption.
+ * The API stores used_percent; <80% remaining means >20% used.
+ */
+pub fn banked_reset_eligible(usage:&Usage)->bool{
+ let covered_five=!usage.plan.to_ascii_lowercase().starts_with("pro");
+ let qualifies=|used:Option<f64>|used.is_some_and(|v|v.is_finite()&&v>20.&&v<=100.);
+ (covered_five&&qualifies(usage.five_hour))||qualifies(usage.weekly)
+}
 #[derive(Debug,Clone,Serialize,Deserialize,Default)]
 pub struct Credit {pub id:String,pub title:String,pub description:String,pub expires_at:String}
 #[derive(Debug,Clone,Serialize,Deserialize,Default)]
@@ -184,4 +192,15 @@ pub async fn ntfy_send(topic:&str,title:&str,message:&str)->Result<(),String>{
  use super::*;
  #[test]fn remaining_is_reverse_of_usage(){let v=serde_json::json!({"primary_window":{"used_percent":27.0,"reset_at":1740000000}});let(p,r)=bucket(&v,"primary_window");assert_eq!(100.-p.unwrap(),73.);assert!(r.is_some());}
  #[test]fn inactive_missing_window_is_none(){let(p,r)=bucket(&Value::Null,"primary_window");assert_eq!(p,None);assert_eq!(r,None);}
+ #[test]fn banked_reset_only_below_eighty_remaining(){
+  let mut u=Usage{plan:"plus".into(),five_hour:Some(0.),weekly:Some(2.),..Default::default()};
+  assert!(!banked_reset_eligible(&u)); // 100% and 98% remaining
+  u.weekly=Some(20.);assert!(!banked_reset_eligible(&u));
+  u.weekly=Some(20.01);assert!(banked_reset_eligible(&u));
+  u.weekly=Some(0.);u.five_hour=Some(21.);assert!(banked_reset_eligible(&u));
+  u.plan="pro".into();assert!(!banked_reset_eligible(&u)); // Pro: weekly only
+  u.weekly=Some(100.);assert!(banked_reset_eligible(&u));
+  u.weekly=None;u.five_hour=Some(f64::NAN);assert!(!banked_reset_eligible(&u));
+ }
+
 }

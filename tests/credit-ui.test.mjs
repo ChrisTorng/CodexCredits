@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {nearestCredit,activeCreditsByExpiry,compactLocalDateTime,chartTooltipPosition,quotaInteriorTicks,bankedCountdown,bankedWarningStage,timelineTicks,historyFallbackTicks,DAY,HOUR} from "../src/credit-ui.ts";
+import {nearestCredit,activeCreditsByExpiry,compactLocalDateTime,chartTooltipPosition,quotaInteriorTicks,bankedCountdown,bankedWarningStage,bankedResetEligibility,bankedQuotaLabel,timelineTicks,historyFallbackTicks,DAY,HOUR} from "../src/credit-ui.ts";
 const now=Date.parse("2026-10-30T12:00:00Z"),future=(ms)=>new Date(now+ms).toISOString();
 test("nearest unexpired credit uses expiry, not API array order",()=>{
  assert.equal(nearestCredit([{id:"late",expires_at:future(12*DAY)},{id:"old",expires_at:future(-DAY)},{id:"soon",expires_at:future(2*DAY)}],now)?.id,"soon");
@@ -46,4 +46,19 @@ test("quota edge labels take priority over intermediate ticks",()=>{
  const visible=quotaInteriorTicks([HOUR,2*HOUR,3*HOUR,4*HOUR],from,to,width,false);
  assert.ok(visible.every(t=>{const x=5+(width-10)*t/to;return x>=72&&x<=width-72;}));
  assert.ok(visible.length<4);
+});
+
+test("manual banked redemption follows the official strict below-80% rule",()=>{
+ const quota=(five,weekly,plan="plus")=>bankedResetEligibility({five_hour:five,weekly,plan});
+ assert.equal(quota(0,2).eligible,false); // Screenshot: 5h 100%, week 98%
+ assert.equal(quota(20,20).eligible,false); // Remaining exactly 80% does not qualify
+ assert.equal(quota(20.1,0).eligible,true);
+ assert.equal(quota(0,20.1).eligible,true);
+ assert.equal(quota(100,0).eligible,true);
+ assert.equal(quota(100,19,"pro").eligible,false); // Pro covers only weekly
+ assert.equal(quota(100,20.1,"pro").eligible,true);
+ assert.equal(quota(null,null).known,false);
+ assert.equal(quota(Number.NaN,null).eligible,false);
+ assert.equal(bankedQuotaLabel(98),"98%");
+ assert.equal(bankedQuotaLabel(null),"尚無資料");
 });
