@@ -8,7 +8,7 @@ const TOLERANCE_SEC:i64=60;
 
 #[derive(Debug,Clone,Copy,PartialEq,Eq,Serialize)]
 #[serde(rename_all="snake_case")]
-pub enum Kind{Auto,Anchor,AnchorRetry,Chain,Recovery}
+pub enum Kind{Auto,Anchor,AnchorRetry,Chain,Recovery,Verify}
 #[derive(Debug,Clone,Serialize)]
 pub struct Next {
  pub at:i64,
@@ -18,6 +18,13 @@ pub struct Next {
 }
 #[derive(Debug,Clone,Copy,Serialize,Deserialize,PartialEq,Eq)]
 pub struct Recovery{pub anchor_at:i64,pub at:i64,pub auto_count:u8}
+#[derive(Debug,Clone,Copy,Serialize,Deserialize,PartialEq,Eq)]
+pub struct PendingVerification{
+ pub at:i64,
+ pub expected_reset:i64,
+ pub auto_count:u8,
+ pub from_recovery:bool,
+}
 #[derive(Debug,Default)]
 pub struct Engine {
  pub next:Option<Next>,
@@ -25,6 +32,7 @@ pub struct Engine {
  pub chain_reset:Option<i64>,
  pub recovery:Option<Recovery>,
  pub recovery_done_anchor:i64,
+ pub pending:Option<PendingVerification>,
 }
 pub fn reset_timestamp(iso:Option<&String>)->Option<i64>{
  iso.and_then(|s|DateTime::parse_from_rfc3339(s).ok()).map(|t|t.timestamp())
@@ -78,7 +86,11 @@ pub fn next_event(settings:&Settings,usage:Option<&Usage>,engine:&Engine,now:i64
     at:r.at.max(now+1),kind:Kind::Recovery,auto_count:r.auto_count,
     reason:format!("錨點錯過 · 補接續，後續自動 {} 次",r.auto_count)
    });
-   [anchor,chain,recovery].into_iter().flatten().min_by_key(|v|v.at)
+   let verify=engine.pending.map(|v|Next{
+    at:v.at.max(now+1),kind:Kind::Verify,auto_count:v.auto_count,
+    reason:"確認先前 Codex 請求是否已啟動 5h".into()
+   });
+   [anchor,chain,recovery,verify].into_iter().flatten().min_by_key(|v|v.at)
   }
  }
 }
@@ -132,6 +144,9 @@ pub fn is_stale(now:i64,at:i64)->bool{now-at>90}
   assert_eq!((r.at,r.auto_count),(anchor+5*3600,2));
   let e=Engine{recovery:Some(r),..Default::default()};
   assert_eq!(next_event(&s,Some(&q),&e,now).unwrap().kind,Kind::Recovery);
+  let mut verifying=e;
+  verifying.pending=Some(PendingVerification{at:now+120,expected_reset:reset,auto_count:2,from_recovery:true});
+  assert_eq!(next_event(&s,Some(&q),&verifying,now).unwrap().kind,Kind::Verify);
   // A five-hour window started just ten seconds before 06:00 still
   // prevents the anchor and must recover today (not tomorrow).
   let early=Usage{five_hour:Some(0.),primary_confirmed:true,

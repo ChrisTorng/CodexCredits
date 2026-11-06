@@ -79,6 +79,7 @@ final class Scheduler {
     private static final String KEY_RECOVERY_AT="missed_anchor_recovery_at_ms";
     private static final String KEY_RECOVERY_ANCHOR="missed_anchor_recovery_anchor_ms";
     private static final String KEY_RECOVERY_COUNT="missed_anchor_recovery_count";
+    private static final String KEY_VERIFY_RESET="missed_anchor_verify_reset_ms";
     private static final String POLICY_AT_RESET="at_reset";
     private static final String POLICY_NEXT_SLOT="next_slot";
     private static final String POLICY_SKIP="skip_today";
@@ -601,9 +602,17 @@ final class Scheduler {
                 storeQuota(c,after,false);
                 record(c,"錨點請求完成，但官方未確認新 5h 視窗");
                 long anchor=prefs(c).getLong(KEY_NEXT,requestedAt);
-                if(after.primary!=null && after.primary.resetAt*1000L>System.currentTimeMillis()
-                    && after.primary.resetAt*1000L-FIVE_HOURS_MS<anchor-2_000L)
-                    planRecovery(c,anchor,autoCount,after.primary.resetAt*1000L);
+                long actualReset=after.primary==null?0:after.primary.resetAt*1000L;
+                if(actualReset>0 && Math.abs(actualReset-requestedAt-FIVE_HOURS_MS)<=180_000L){
+                    prefs(c).edit().putLong(KEY_RECOVERY_ANCHOR,anchor)
+                            .putLong(KEY_RECOVERY_AT,System.currentTimeMillis()+150_000L)
+                            .putInt(KEY_RECOVERY_COUNT,autoCount)
+                            .putLong(KEY_VERIFY_RESET,actualReset).apply();
+                    record(c,"錨點請求已完成，稍後驗證 5h 是否啟動");
+                }else if(actualReset>System.currentTimeMillis()
+                    && actualReset-FIVE_HOURS_MS<anchor-2_000L){
+                    planRecovery(c,anchor,autoCount,actualReset);
+                }
                 scheduleNextCustom(c,System.currentTimeMillis()+1_000L);
                 return;
             }
@@ -767,7 +776,7 @@ final class Scheduler {
 
     static void clearRecovery(Context c){
         prefs(c).edit().remove(KEY_RECOVERY_AT).remove(KEY_RECOVERY_ANCHOR)
-                .remove(KEY_RECOVERY_COUNT).apply();
+                .remove(KEY_RECOVERY_COUNT).remove(KEY_VERIFY_RESET).apply();
     }
 
     private static String missedPolicy(Context c){
@@ -830,6 +839,30 @@ final class Scheduler {
             storeQuota(c,quota,false);
             Snapshot live=snapshot(c);
             long now=System.currentTimeMillis();
+            long verifyReset=prefs(c).getLong(KEY_VERIFY_RESET,0);
+            if(verifyReset>0){
+                // The first post-trigger quota may still look like an idle
+                // now+5h placeholder. After >=2 minutes a fixed reset proves
+                // this was actually started, without posting another request.
+                if(live.primaryConfirmed && Math.abs(live.primaryResetMs-verifyReset)<=20_000L){
+                    clearRecovery(c);
+                    record(c,"新 5h 已由穩定重置時間確認，接續排程恢復");
+                    notifyNtfy(c,"Codex 5h 啟動已確認",quotaNotification(quota));
+                    startChainFrom(c,quota,autoCount);
+                    scheduleNextCustom(c,now+1_000L);
+                }else{
+                    if(POLICY_SKIP.equals(missedPolicy(c))){
+                        clearRecovery(c);
+                        record(c,"伺服器未確認新視窗，依設定取消今日接續");
+                    }else{
+                        prefs(c).edit().remove(KEY_VERIFY_RESET)
+                                .putLong(KEY_RECOVERY_AT,now+15*60_000L).apply();
+                        record(c,"伺服器的重置時間仍未固定，15 分鐘後再檢查");
+                    }
+                    scheduleNextCustom(c,now+1_000L);
+                }
+                return;
+            }
             if(live.primaryConfirmed && live.primaryResetMs>now){
                 // The next nominal slot cannot restart an active server window.
                 long delayed=live.primaryResetMs+RESET_GRACE_MS;
@@ -858,8 +891,13 @@ final class Scheduler {
                 scheduleNextCustom(c,System.currentTimeMillis()+1_000L);
             }else{
                 storeQuota(c,after,false);
-                record(c,"補接續請求完成，但伺服器尚未確認新 5h；15 分鐘後再檢查");
-                prefs(c).edit().putLong(KEY_RECOVERY_AT,System.currentTimeMillis()+15*60_000L).apply();
+                long actualReset=after.primary==null?0:after.primary.resetAt*1000L;
+                boolean plausible=actualReset>0&&Math.abs(actualReset-requestedAt-FIVE_HOURS_MS)<=180_000L;
+                SharedPreferences.Editor editor=prefs(c).edit();
+                if(plausible)editor.putLong(KEY_VERIFY_RESET,actualReset);
+                else editor.remove(KEY_VERIFY_RESET);
+                editor.putLong(KEY_RECOVERY_AT,System.currentTimeMillis()+(plausible?150_000L:15*60_000L)).apply();
+                record(c,plausible?"補接續請求已完成，稍後驗證新視窗":"補接續未確認，15 分鐘後再檢查");
                 scheduleNextCustom(c,System.currentTimeMillis()+1_000L);
             }
         }catch(Exception e){
@@ -894,8 +932,10 @@ final class Scheduler {
         }
 
         if(recoveryMs<=anchorMs && recoveryMs<=chainMs){
-            scheduleEvent(c,recoveryMs,"錯過錨點 · 今日補接續，後續自動 "+recoveryCount+" 次",
-                    EVENT_RECOVERY,recoveryCount);
+            String reason=prefs(c).getLong(KEY_VERIFY_RESET,0)>0
+                    ?"確認已發送的 Codex 請求是否啟動 5h":
+                    "錯過錨點 · 今日補接續，後續自動 "+recoveryCount+" 次";
+            scheduleEvent(c,recoveryMs,reason,EVENT_RECOVERY,recoveryCount);
         }else if(chainMs<=anchorMs){
             scheduleEvent(c,chainMs,"自動接續，尚餘 "+remaining+" 次",EVENT_CHAIN,0);
         }else{
