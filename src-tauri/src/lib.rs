@@ -602,29 +602,34 @@ async fn run_planned(s:&State,planned:engine::Next){
  }
  if planned.kind==engine::Kind::Verify{
   let actual_reset=engine::reset_timestamp(quota.five_reset.as_ref());
-  let mut e=s.engine.lock().unwrap();
-  if let Some(pending)=e.pending.take(){
-   let fixed=engine::confirmed(&quota,now())
-    && actual_reset.is_some_and(|r|(r-pending.expected_reset).abs()<=20);
-   if fixed{
-    if pending.auto_count>0{
-     e.chain_remaining=pending.auto_count;
-     e.chain_reset=actual_reset;
-    }
-    if pending.from_recovery{
-     if let Some(r)=e.recovery.take(){e.recovery_done_anchor=r.anchor_at;}
-    }
-    drop(e);
-    record(s,"scheduler","已確認先前請求啟動 5h，後續接續排程恢復");
-    notify(s,"Codex 5h 啟動已確認","後續自動接續排程已恢復").await;
-   }else{
-    if pending.from_recovery{
+  // Do not hold a std::sync::MutexGuard across the async notification.
+  let verification={
+   let mut e=s.engine.lock().unwrap();
+   if let Some(pending)=e.pending.take(){
+    let fixed=engine::confirmed(&quota,now())
+     && actual_reset.is_some_and(|r|(r-pending.expected_reset).abs()<=20);
+    if fixed{
+     if pending.auto_count>0{
+      e.chain_remaining=pending.auto_count;
+      e.chain_reset=actual_reset;
+     }
+     if pending.from_recovery{
+      if let Some(r)=e.recovery.take(){e.recovery_done_anchor=r.anchor_at;}
+     }
+    }else if pending.from_recovery{
      if let Some(ref mut r)=e.recovery{r.at=now()+900;}
     }
-    drop(e);
-    record(s,"scheduler","無法確認上一筆請求建立新 5h，保留下一次排程");
-   }
-  }else{drop(e);}
+    Some(fixed)
+   }else{None}
+  };
+  match verification{
+   Some(true)=>{
+    record(s,"scheduler","已確認先前請求啟動 5h，後續接續排程恢復");
+    notify(s,"Codex 5h 啟動已確認","後續自動接續排程已恢復").await;
+   },
+   Some(false)=>record(s,"scheduler","無法確認上一筆請求建立新 5h，保留下一次排程"),
+   None=>{},
+  }
   replan(s);return;
  }
  if mode==schedule::Mode::Custom&&engine::confirmed(&quota,now()){
