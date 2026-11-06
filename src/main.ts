@@ -11,7 +11,7 @@ echarts.use([LineChart,GridComponent,TooltipComponent,LegendComponent,TitleCompo
 import {actualFiveHourWindows,observedQuotaWindows,eventConfirmedFiveHourWindows,historyScheduleGuides,interruptAtNextReset,idealSegment,idealQuotaSegment,windowBoundaries,readableBoundaries,clockLabel,FIVE_HOUR_MS} from "./chart-windows";
 import {buildHistoryFeed} from "./history-feed";
 import {globalResetSummary} from "./global-reset-ui";
-import {nearestCredit,activeCreditsByExpiry,compactLocalDateTime,bankedCountdown,chartTooltipPosition,quotaInteriorTicks,timelineTicks,historyFallbackTicks} from "./credit-ui";
+import {nearestCredit,activeCreditsByExpiry,compactLocalDateTime,bankedCountdown,bankedResetEligibility,bankedQuotaLabel,chartTooltipPosition,quotaInteriorTicks,timelineTicks,historyFallbackTicks} from "./credit-ui";
 import "./style.css";
 
 type Mode="off"|"auto"|"custom";
@@ -373,13 +373,17 @@ function render(){
    "可立即開始 5h · 預估重置 "+fdate(new Date(Date.now()+5*3600000).toISOString());
  ($("trigger") as HTMLButtonElement).disabled=!s.signed_in||stale||confirmed||!u?.allowed||u?.weekly===100;
  const credits=s.credits;const available=credits?.count??0;
+ const banked=bankedResetEligibility(u);
  $("reset-title").textContent="Banked Reset ×"+available+(s.armed?" · 待命":"");
- $("reset-action").textContent="使用 Banked Reset";
+ $("reset-action").textContent=s.signed_in&&!stale&&banked.eligible?"使用 Banked Reset":"管理 Banked Reset";
  ($("reset-action") as HTMLButtonElement).hidden=available<=0&&!s.armed;
  const active=activeCreditsByExpiry(credits?.available??[]);
+ const bankedNote=stale?"用量尚未更新，立即使用前須取得最新配額":
+  !banked.known?"目前缺少可核對的配額資料":
+  !banked.eligible?"目前無須重置：官方規定適用額度須低於 80% 剩餘":"";
  $("reset-expiry").textContent=(s.armed?"用盡後自動重置\n":"")+
   (active.length?active.map((c,i)=>(i+1)+". 到期 "+fdate(c.expires_at)+" · 剩 "+bankedCountdown(c.expires_at)).join("\n"):
-   "目前沒有有效的 Banked Reset");
+   "目前沒有有效的 Banked Reset")+(bankedNote?"\n"+bankedNote:"");
  const global=s.global;
  $("global-reset").textContent=globalResetSummary(global);
  ($("mode") as HTMLSelectElement).value=mode;
@@ -493,13 +497,27 @@ $("trigger").onclick=async()=>{
 };
 $("reset-action").onclick=()=>{
  const s=snapshot;if(!s)return;
- $("reset-dialog-title").textContent="使用 Banked Reset（一次一張）";
  const credit=nearestCredit(s.credits?.available??[]);
- $("reset-dialog-desc").textContent="每次只使用最早到期的一張 Banked Reset。用盡時可立即重置、設定待命，或明確選擇重置部分用量。"+
-   (credit?"\n本次使用：到期 "+fdate(credit.expires_at)+" · 剩 "+bankedCountdown(credit.expires_at):"\n目前沒有有效的 Banked Reset");
+ const eligibility=bankedResetEligibility(s.usage);
+ const checkedAt=s.usage?.checked_at?Date.parse(s.usage.checked_at):0;
+ const fresh=Number.isFinite(checkedAt)&&checkedAt>0&&Date.now()-checkedAt<=15*60000;
+ const canRedeem=!!credit&&s.signed_in&&fresh&&eligibility.eligible;
+ $("reset-dialog-title").textContent="使用 Banked Reset（一次一張）";
+ const quotaText="目前額度：5h 剩餘 "+bankedQuotaLabel(eligibility.fiveRemaining)+
+  "，每週剩餘 "+bankedQuotaLabel(eligibility.weeklyRemaining)+"。";
+ const effects="使用後，符合方案範圍的已用額度會補回 100%；尚未使用的剩餘額度不會疊加。" +
+  "已是 100% 的額度不會重新開始，其他重置週期與下次自動重置時間可能改變。";
+ const reason=!fresh?"目前顯示的是舊資料，請先更新用量。":
+  !eligibility.known?"尚未取得有效配額，請先更新用量。":
+  !eligibility.eligible?"目前無須重置：OpenAI 要求至少一項適用額度剩餘低於 80%。Banked Reset 不會因此被扣除。":"符合官方手動重置條件。";
+ $("reset-dialog-desc").textContent="每次只使用最早到期的一張 Banked Reset。\n"+
+  quotaText+"\n"+effects+"\n"+reason+
+  (eligibility.fiveCovered?"":"\n目前方案只涵蓋每週額度。")+
+  (credit?"\n本次使用：到期 "+fdate(credit.expires_at)+" · 剩 "+bankedCountdown(credit.expires_at):"\n目前沒有有效的 Banked Reset");
  $("reset-arm").textContent=s.armed?"取消待命":"用盡後自動使用一次";
- ($("reset-exhausted") as HTMLButtonElement).disabled=!(s.usage?.five_hour===100||s.usage?.weekly===100||s.usage?.limit_reached);
- ($("reset-now") as HTMLButtonElement).disabled=!(!!s.usage?.five_hour||!!s.usage?.weekly);
+ ($("reset-arm") as HTMLButtonElement).disabled=!s.armed&&!credit;
+ ($("reset-exhausted") as HTMLButtonElement).disabled=!canRedeem||!(s.usage?.five_hour===100||s.usage?.weekly===100||s.usage?.limit_reached);
+ ($("reset-now") as HTMLButtonElement).disabled=!canRedeem;
  ($("reset-dialog") as HTMLDialogElement).showModal();
 };
 const resetDialog=$("reset-dialog") as HTMLDialogElement;
@@ -512,9 +530,15 @@ $("reset-cancel").onclick=()=>resetDialog.close();
 $("reset-arm").onclick=async()=>{try{await call("toggle_banked_armed");($("reset-dialog") as HTMLDialogElement).close();await load();}catch(e){toast(String(e));}};
 for(const [id,partial] of [["reset-exhausted",false],["reset-now",true]] as const){
  $(id).onclick=async()=>{
-  if(!confirm(partial?"確定現在使用一個 Banked Reset，重置部分已用額度？":"確定使用一個 Banked Reset？"))return;
+  const status=bankedResetEligibility(snapshot?.usage);
+  if(!status.eligible){toast("目前不需要重置：適用額度必須低於 80% 剩餘");return;}
+  const warning="即將消耗一張 Banked Reset。\n"+
+   "目前：5h 尚餘 "+bankedQuotaLabel(status.fiveRemaining)+"、每週尚餘 "+bankedQuotaLabel(status.weeklyRemaining)+"。\n"+
+   "未用完的額度不會累加；重置可能使目前週期提前結束，並改變下次自動重置時間。此操作無法復原。\n"+
+   (partial?"確認現在使用？":"確認立即重置已用盡的配額？");
+  if(!confirm(warning))return;
   try{await call("banked_reset",{allowPartial:partial});($("reset-dialog") as HTMLDialogElement).close();toast("Banked Reset 已執行");await refresh();}
-  catch(e){toast("Banked Reset 失敗："+String(e));}
+  catch(e){toast("Banked Reset 未完成："+String(e));}
  };
 }
 $("apply-mode").onclick=async()=>{

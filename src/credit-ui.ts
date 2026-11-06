@@ -1,5 +1,25 @@
 /** Shared Android/Windows Banked Reset countdown and local clock ticks. */
 export type CreditExpiry={id:string;expires_at:string};
+/** The usage API stores used_percent; UI values are the reverse (remaining). */
+export type BankedQuota={five_hour:number|null;weekly:number|null;plan:string};
+const quotaRemaining=(used:number|null|undefined):number|null=>
+ typeof used==="number"&&Number.isFinite(used)&&used>=0&&used<=100?100-used:null;
+/** OpenAI manual redemption requires an affected quota below 80% remaining.
+ * On Pro only the weekly limit is covered; Plus/Business Standard cover both.
+ */
+export function bankedResetEligibility(usage:BankedQuota|null|undefined){
+ const fiveRemaining=quotaRemaining(usage?.five_hour);
+ const weeklyRemaining=quotaRemaining(usage?.weekly);
+ const fiveCovered=!/^pro(?:$|[_ -]|[0-9])/i.test(usage?.plan??"");
+ const known=weeklyRemaining!==null||(fiveCovered&&fiveRemaining!==null);
+ const eligible=(fiveCovered&&fiveRemaining!==null&&fiveRemaining<80)
+  ||(weeklyRemaining!==null&&weeklyRemaining<80);
+ return {eligible,known,fiveCovered,fiveRemaining,weeklyRemaining};
+}
+export function bankedQuotaLabel(value:number|null):string{
+ return value===null?"尚無資料":Number(value.toFixed(1))+"%";
+}
+
 export const HOUR=3600000,DAY=24*HOUR;
 export function activeCreditsByExpiry<T extends CreditExpiry>(items:readonly T[],now=Date.now()):T[]{
  return items.filter(c=>Number.isFinite(Date.parse(c.expires_at))&&Date.parse(c.expires_at)>now)
