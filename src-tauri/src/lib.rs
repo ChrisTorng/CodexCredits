@@ -571,6 +571,10 @@ fn defer_scheduled_retry(s:&State,planned:&engine::Next,seconds:i64){
   if let Some(ref mut r)=e.recovery{r.at=now()+seconds;}
   drop(e);replan(s);return;
  }
+ if planned.kind==engine::Kind::Verify{
+  if let Some(ref mut p)=e.pending{p.at=now()+seconds;}
+  drop(e);replan(s);return;
+ }
  e.next=Some(engine::Next{
   at:now()+seconds,kind:planned.kind,auto_count:planned.auto_count,
   reason:format!("失敗後 {} 分鐘再檢查",seconds/60),
