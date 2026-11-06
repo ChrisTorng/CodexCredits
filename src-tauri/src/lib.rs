@@ -124,7 +124,7 @@ fn replan(s:&State){
  let db=s.db.lock().unwrap();
  let _=if let Some(r)=recovery{storage::save_cached(&db,"missed_anchor_recovery_v1",&r)}
  else{storage::set_meta(&db,"missed_anchor_recovery_v1",None)};
- let _=storage::set_meta(&db,"missed_anchor_recovery_done",&done.to_string());
+ let _=storage::set_meta(&db,"missed_anchor_recovery_done",Some(&done.to_string()));
 }
 // A zero-used primary window can contain a sliding now+5h placeholder.
 // Only real usage, a previously successful local trigger, or a stable

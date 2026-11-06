@@ -400,7 +400,10 @@ function render(){
    ?"錨點失敗時保留今天排程：例如 06:00 失敗，11:00 補開始，之後在 16:00、21:00 依實際重置時間接續。若 11:00 仍有有效視窗，先等它結束。"
    :"錨點失敗時取消該次錨點當日的所有後續接續，等下一個錨點再開始。";
  $("alarm").textContent=s.next?fdate(new Date(s.next.at*1000).toISOString())+" · "+s.next.reason:"尚未排程";
- $("schedule-preview").textContent=mode==="off"?"排程已關閉":mode==="auto"?"下一次以目前 quota reset 為基準":"下一錨點："+(s.next?fdate(new Date(s.next.at*1000).toISOString()):"尚未排程");
+ $("schedule-preview").textContent=mode==="off"?"排程已關閉":mode==="auto"?"下一次以目前 quota reset 為基準":
+  s.next?.kind==="recovery"?"今日補接續："+fdate(new Date(s.next.at*1000).toISOString())+" · 後續自動 "+s.next.auto_count+" 次":
+  s.next?.kind==="chain"?"依實際重置時間接續："+fdate(new Date(s.next.at*1000).toISOString()):
+  "下一錨點："+(s.next?fdate(new Date(s.next.at*1000).toISOString()):"尚未排程");
  $("weekly-summary").textContent=s.settings.rules.filter(r=>r.enabled).map(r=>ruleLabel(r,true)).join("\n")||"沒有錨點";
  for(const [key,date,output] of [["today",today(0),"today-summary"],["tomorrow",today(1),"tomorrow-summary"]] as const){
   const over=s.settings.overrides[date];
