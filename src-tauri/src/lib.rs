@@ -113,6 +113,27 @@ fn replan(s:&State){
 // A zero-used primary window can contain a sliding now+5h placeholder.
 // Only real usage, a previously successful local trigger, or a stable
 // reset_at over multiple samples proves that a 5h window is running.
+#[derive(Debug,Clone,Copy,PartialEq,Eq,Serialize)]
+#[serde(rename_all="snake_case")]
+enum TriggerOutcome{Started,Unchanged,Pending}
+/// The Codex request can complete inside an already-running five-hour window.
+/// Never report "new 5h started" without evidence that the reset anchor moved.
+fn classify_trigger(before:&api::Usage,after:&api::Usage,requested_at:i64)->TriggerOutcome{
+ let Some(reset)=engine::reset_timestamp(after.five_reset.as_ref())else{return TriggerOutcome::Pending};
+ let previous=engine::reset_timestamp(before.five_reset.as_ref());
+ let at_new_window=(reset-(requested_at+5*3600)).abs()<=180;
+ let moved=previous.is_none_or(|old|reset-old>90);
+ if at_new_window&&moved{return TriggerOutcome::Started;}
+ // If reset is still substantially earlier than request+5h, this request
+ // was processed in an existing window (e.g. 06:19, reset still 09:47).
+ if reset<requested_at+4*3600+30*60{return TriggerOutcome::Unchanged;}
+ if previous.is_some_and(|old|(reset-old).abs()<=90)
+  &&(before.primary_confirmed||before.five_hour.is_some_and(|u|u>0.0001))
+ {return TriggerOutcome::Unchanged;}
+ // The idle placeholder may equal the true new reset; only subsequent
+ // observations can prove whether it became a stable five-hour window.
+ TriggerOutcome::Pending
+}
 fn confirmed_primary_at(new:&api::Usage,prev:Option<&api::Usage>,triggered_reset:Option<&String>,timestamp:i64)->bool{
  if new.five_hour.is_some_and(|p|p>0.0001){return true;}
  if new.five_hour.is_none(){return false;}
@@ -187,13 +208,38 @@ mod five_hour_detection_tests{
   let mut new=usage(t+360,t+5*3600,0.);new.weekly=Some(0.);
   assert!(!confirmed_primary_at(&new,Some(&old),None,t+360));
  }
+ #[test]fn minimal_request_does_not_restart_existing_5h_window(){
+  let t=1_800_000_000;
+  let before=usage(t-60,t+3*3600+28*60,0.);
+  let after=usage(t+5,t+3*3600+28*60,0.);
+  assert_eq!(classify_trigger(&before,&after,t),TriggerOutcome::Unchanged);
+ }
+ #[test]fn new_reset_after_completed_codex_request_confirms_new_window(){
+  let t=1_800_000_000;
+  let before=usage(t-60,t+3*3600+28*60,0.);
+  let after=usage(t+6,t+5*3600,0.);
+  assert_eq!(classify_trigger(&before,&after,t),TriggerOutcome::Started);
+ }
+ #[test]fn same_now_plus_five_hours_placeholder_requires_followup_sampling(){
+  let t=1_800_000_000;
+  let before=usage(t-60,t+5*3600,0.);
+  let after=usage(t+6,t+5*3600,0.);
+  assert_eq!(classify_trigger(&before,&after,t),TriggerOutcome::Pending);
+ }
+ #[test]fn no_reset_response_is_not_success(){
+  let t=1_800_000_000;
+  let before=usage(t-60,t+5*3600,0.);
+  let after=api::Usage::default();
+  assert_eq!(classify_trigger(&before,&after,t),TriggerOutcome::Pending);
+ }
+
 }
 async fn refresh_internal(s:&State,force_aux:bool)->Result<api::Usage,String>{
  let _guard=s.updating.lock().await;
  let access=oauth::valid_access().await?;
  let mut value=api::fetch_usage(&access.token,access.account_id.as_deref()).await?;
  let before=s.usage.lock().unwrap().clone();
- let confirmed_reset=storage::get_meta(&s.db.lock().unwrap(),"five_trigger_reset");
+ let confirmed_reset=storage::get_meta(&s.db.lock().unwrap(),"five_trigger_verified_reset_v2");
  value.primary_confirmed=confirmed_primary_at(&value,before.as_ref(),confirmed_reset.as_ref(),now());
  {
   let db=s.db.lock().unwrap();
@@ -294,32 +340,47 @@ async fn notify(s:&State,title:&str,message:&str){
   };
  }
 }
-async fn trigger(s:&State,followups:u8,kind:&str)->Result<(),String>{
+async fn trigger(s:&State,followups:u8,kind:&str)->Result<TriggerOutcome,String>{
  let _action=s.action.lock().await;
  let q=refresh_internal(s,false).await?;
  engine::can_trigger(&q,now())?;
  let access=oauth::valid_access().await?;
+ let requested_at=now();
+ // Wait for the terminal SSE response, not merely HTTP 200.
  api::trigger_minimal(&access.token,access.account_id.as_deref()).await?;
  tokio::time::sleep(Duration::from_secs(2)).await;
  let mut after=refresh_internal(s,false).await?;
- // A completed minimal request is explicit evidence of a local 5h start.
- // Persist it so a subsequent fast refresh does not clear confirmation.
- after.primary_confirmed=engine::reset_timestamp(after.five_reset.as_ref()).is_some_and(|r|r>now());
- if after.primary_confirmed{
-  let db=s.db.lock().unwrap();
-  storage::set_meta(&db,"five_trigger_reset",after.five_reset.as_deref())?;
-  storage::save_cached(&db,"last_usage",&after)?;
+ let outcome=classify_trigger(&q,&after,requested_at);
+ match outcome {
+  TriggerOutcome::Started=>{
+   after.primary_confirmed=true;
+   {
+    let db=s.db.lock().unwrap();
+    // v2 key intentionally excludes old false-positive 2xx-only receipts.
+    storage::set_meta(&db,"five_trigger_verified_reset_v2",after.five_reset.as_deref())?;
+    storage::save_cached(&db,"last_usage",&after)?;
+   }
+   *s.usage.lock().unwrap()=Some(after.clone());
+   record(s,"trigger",&format!("{kind}5h 視窗啟動已確認"));
+   if followups>0 {
+    let reset=engine::reset_timestamp(after.five_reset.as_ref());
+    let mut e=s.engine.lock().unwrap();
+    e.chain_remaining=followups;e.chain_reset=reset;
+   }
+   notify(s,"Codex 5h 視窗啟動已確認",&format!("5h 剩餘 {:.0}%",100.-after.five_hour.unwrap_or(0.))).await;
+  },
+  TriggerOutcome::Unchanged=>{
+   let reset=after.five_reset.as_deref().unwrap_or("—");
+   record(s,"trigger_no_change",&format!("{kind}請求完成，但 5h 視窗未重新開始 · 原重置時間不變 · {reset}"));
+   notify(s,"Codex 請求完成，5h 視窗未重啟","官方配額仍顯示原來的重置時間，沒有建立新視窗").await;
+  },
+  TriggerOutcome::Pending=>{
+   record(s,"trigger_pending",&format!("{kind}請求完成，但 5h 視窗是否新建仍待確認"));
+   notify(s,"Codex 請求完成，5h 尚待確認","尚未觀察到可確認的新視窗；不會提前宣稱已啟動").await;
+  }
  }
- *s.usage.lock().unwrap()=Some(after.clone());
- record(s,"trigger",&format!("{kind}觸發成功"));
- if followups>0&&after.primary_confirmed{
-  let reset=engine::reset_timestamp(after.five_reset.as_ref());
-  let mut e=s.engine.lock().unwrap();
-  e.chain_remaining=followups;
-  e.chain_reset=reset;
- }
- notify(s,"Codex 觸發成功",&format!("5h 剩餘 {:.0}%",100.-after.five_hour.unwrap_or(0.))).await;
- replan(s);Ok(())
+ replan(s);
+ Ok(outcome)
 }
 async fn consume(s:&State,allow_partial:bool,selected:Option<String>)->Result<(),String>{
  let _action=s.action.lock().await;
@@ -350,6 +411,7 @@ async fn consume(s:&State,allow_partial:bool,selected:Option<String>)->Result<()
   let db=s.db.lock().unwrap();
   storage::set_meta(&db,"banked_armed",None)?;
   storage::set_meta(&db,"five_trigger_reset",None)?;
+  storage::set_meta(&db,"five_trigger_verified_reset_v2",None)?;
  }
  tokio::time::sleep(Duration::from_secs(1)).await;
  let _=refresh_internal(s,true).await;
@@ -390,6 +452,7 @@ async fn consume(s:&State,allow_partial:bool,selected:Option<String>)->Result<()
  *s.usage.lock().unwrap()=None;*s.credits.lock().unwrap()=None;
  *s.armed.lock().unwrap()=None;
  storage::set_meta(&s.db.lock().unwrap(),"five_trigger_reset",None)?;
+ storage::set_meta(&s.db.lock().unwrap(),"five_trigger_verified_reset_v2",None)?;
  storage::set_meta(&s.db.lock().unwrap(),"banked_armed",None)?;
  {
   let mut settings=s.settings.lock().unwrap();settings.mode=schedule::Mode::Off;
@@ -407,10 +470,11 @@ async fn consume(s:&State,allow_partial:bool,selected:Option<String>)->Result<()
  if let Err(ref e)=result{*s.error.lock().unwrap()=Some(e.clone());}
  let _=app.emit("credits:updated",());result
 }
-#[tauri::command]async fn manual_trigger(app:AppHandle,s:tauri::State<'_,Arc<State>>)->Result<Snapshot,String>{
+#[tauri::command]async fn manual_trigger(app:AppHandle,s:tauri::State<'_,Arc<State>>)->Result<TriggerOutcome,String>{
  let result=trigger(&s,0,"手動").await;
- if let Err(ref e)=result{record(&s,"error",&format!("手動觸發失敗: {e}"));}
- let _=app.emit("credits:updated",());result?;Ok(snapshot(&s))
+ if let Err(ref e)=result{record(&s,"error",&format!("手動 Codex 請求失敗: {e}"));}
+ let _=app.emit("credits:updated",());
+ result
 }
 #[tauri::command]async fn banked_reset(app:AppHandle,s:tauri::State<'_,Arc<State>>,allow_partial:bool)->Result<Snapshot,String>{
  consume(&s,allow_partial,None).await?;
@@ -507,13 +571,27 @@ async fn run_planned(s:&State,planned:engine::Next){
   if planned.kind==engine::Kind::Chain{s.engine.lock().unwrap().chain_remaining.saturating_sub(1)}
   else{planned.auto_count}
  }else{0};
- if let Err(e)=trigger(s,followups,"排程").await{
-  record(s,"error",&format!("排程觸發失敗: {e}"));
-  notify(s,"Codex 排程錯誤",&e).await;
-  // A network error after POST cannot prove that the server did not
-  // accept the trigger. Back off rather than immediately retrying.
-  defer_scheduled_retry(s,&planned,900);
-  return;
+ match trigger(s,followups,"排程").await{
+  Ok(TriggerOutcome::Started)=>{},
+  Ok(TriggerOutcome::Unchanged)=>{
+   // If the existing window is still not locally confirmed, do not
+   // issue another minimal request every 15 seconds.
+   replan(s);
+   let confirmed={s.usage.lock().unwrap().as_ref().is_some_and(|u|engine::confirmed(u,now()))};
+   if !confirmed{defer_scheduled_retry(s,&planned,900);}
+   return;
+  },
+  Ok(TriggerOutcome::Pending)=>{
+   defer_scheduled_retry(s,&planned,300);
+   return;
+  },
+  Err(e)=>{
+   record(s,"error",&format!("排程觸發失敗: {e}"));
+   notify(s,"Codex 排程錯誤",&e).await;
+   // A network error after POST cannot prove the server rejected it.
+   defer_scheduled_retry(s,&planned,900);
+   return;
+  }
  }
  if planned.kind==engine::Kind::Chain&&followups==0{
   let mut e=s.engine.lock().unwrap();e.chain_remaining=0;e.chain_reset=None;

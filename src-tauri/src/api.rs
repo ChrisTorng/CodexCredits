@@ -103,6 +103,28 @@ pub async fn consume_credit(token:&str,account_id:Option<&str>,credit_id:&str)->
  let json:Value=response.json().await.map_err(|e|e.to_string())?;
  Ok(json["windows_reset"].as_i64().unwrap_or(0))
 }
+/// HTTP 200 is only stream acceptance: the model response may still fail
+/// or be cancelled when its SSE body is dropped before response.completed.
+fn completed_codex_stream(raw:&str)->Result<(),String>{
+ let mut completed=false;
+ for line in raw.lines(){
+  let Some(payload)=line.trim().strip_prefix("data:")else{continue};
+  let Ok(event)=serde_json::from_str::<Value>(payload.trim())else{continue};
+  match event["type"].as_str().unwrap_or_default(){
+   "response.completed"=>completed=true,
+   "response.failed"|"response.incomplete"|"error"=>{
+    let detail=event["response"]["error"]["message"].as_str()
+     .or_else(||event["error"]["message"].as_str())
+     .unwrap_or("Codex 回應未完成");
+    return Err(format!("Codex 串流未成功完成：{detail}"));
+   },
+   _=>{}
+  }
+ }
+ if completed{Ok(())}else{
+  Err("Codex 串流已結束但未收到 response.completed；無法確認請求完成".into())
+ }
+}
 pub async fn trigger_minimal(token:&str,account_id:Option<&str>)->Result<(),String>{
  let client=reqwest::Client::builder().timeout(std::time::Duration::from_secs(65)).build().map_err(|e|e.to_string())?;
  let payload=serde_json::json!({"model":"gpt-5.6-luna","store":false,"stream":true,"instructions":"Reply .",
@@ -114,8 +136,12 @@ pub async fn trigger_minimal(token:&str,account_id:Option<&str>)->Result<(),Stri
   .header("Accept","text/event-stream").json(&payload);
  if let Some(id)=account_id{req=req.header("ChatGPT-Account-Id",id);}
  let response=req.send().await.map_err(|e|e.to_string())?;
- if !response.status().is_success(){return Err(format!("立即觸發 HTTP {}",response.status()));}
- Ok(())
+ let status=response.status();
+ if !status.is_success(){return Err(format!("Codex 請求 HTTP {status}"));}
+ // Keep the SSE connection alive until the terminal event. Merely receiving
+ // headers then dropping the response can abort an otherwise accepted request.
+ let raw=response.text().await.map_err(|e|format!("Codex 串流中斷，完成狀態不明：{e}"))?;
+ completed_codex_stream(&raw)
 }
 pub async fn global_reset()->Result<(Global,Vec<i64>),String>{
  let client=http()?;
@@ -192,6 +218,14 @@ pub async fn ntfy_send(topic:&str,title:&str,message:&str)->Result<(),String>{
  use super::*;
  #[test]fn remaining_is_reverse_of_usage(){let v=serde_json::json!({"primary_window":{"used_percent":27.0,"reset_at":1740000000}});let(p,r)=bucket(&v,"primary_window");assert_eq!(100.-p.unwrap(),73.);assert!(r.is_some());}
  #[test]fn inactive_missing_window_is_none(){let(p,r)=bucket(&Value::Null,"primary_window");assert_eq!(p,None);assert_eq!(r,None);}
+ #[test]fn streamed_trigger_must_finish_before_reporting_success(){
+  let finished="data: {\"type\":\"response.created\"}\n\ndata: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\"}}\n\n";
+  assert!(completed_codex_stream(finished).is_ok());
+  assert!(completed_codex_stream("data: {\"type\":\"response.created\"}\n\n").is_err());
+  assert!(completed_codex_stream("data: {\"type\":\"response.failed\",\"response\":{\"error\":{\"message\":\"failed\"}}}\n").is_err());
+  assert!(completed_codex_stream("data: {\"type\":\"response.incomplete\"}\n").is_err());
+ }
+
  #[test]fn banked_reset_only_below_eighty_remaining(){
   let mut u=Usage{plan:"plus".into(),five_hour:Some(0.),weekly:Some(2.),..Default::default()};
   assert!(!banked_reset_eligible(&u)); // 100% and 98% remaining

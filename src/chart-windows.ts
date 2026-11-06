@@ -150,15 +150,16 @@ export function historyScheduleGuides(
  }
  return [...new Set(times)].sort((a,b)=>a-b);
 }
-/** A successful trigger log is evidence of an actual started window, even if
- * quota never dropped below 100%; do not equate mere scheduled times to events. */
+/** Only explicitly verified NEW windows count as event evidence. Older
+ * "觸發成功" records meant HTTP 200, not a confirmed completed Codex
+ * response or a new server quota window; do not invent ideal lines for them. */
 export type ConfirmedTriggerEvent={at:string;kind:string;detail:string};
 export function eventConfirmedFiveHourWindows(
  events:readonly ConfirmedTriggerEvent[],observed:readonly FiveHourWindow[],now=Date.now()
 ):FiveHourWindow[]{
  const found:FiveHourWindow[]=[];
  for(const e of events){
-  if(e.kind!=="trigger"||!e.detail.includes("觸發成功"))continue;
+  if(e.kind!=="trigger"||!e.detail.includes("5h 視窗啟動已確認"))continue;
   const at=Date.parse(e.at);
   if(!valid(at)||at>now||at<now-31*24*3600000)continue;
   if(observed.some(w=>Math.abs(w.start-at)<10*60000 || (w.start<=at&&at<w.end)))continue;
