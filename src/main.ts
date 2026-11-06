@@ -369,8 +369,8 @@ function render(){
  const stale=!Number.isFinite(checkedAt)||checkedAt<=0||Date.now()-checkedAt>15*60000;
  $("trigger-preview").textContent=!s.signed_in?"請先登入":
    stale?(u?.checked_at?"顯示上次用量 · 自動更新中":"正在取得最新用量…"):
-   confirmed?"5h 進行中 · 下次可開始："+fdate(u?.five_reset):
-   "可立即開始 5h · 預估重置 "+fdate(new Date(Date.now()+5*3600000).toISOString());
+   confirmed?"5h 視窗已確認啟動 · 下次可開始："+fdate(u?.five_reset):
+   "5h 尚未確認啟動 · 可立即開始（目前重置時間可能只是預估）";
  ($("trigger") as HTMLButtonElement).disabled=!s.signed_in||stale||confirmed||!u?.allowed||u?.weekly===100;
  const credits=s.credits;const available=credits?.count??0;
  const banked=bankedResetEligibility(u);

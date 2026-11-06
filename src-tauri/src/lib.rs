@@ -110,54 +110,82 @@ fn replan(s:&State){
  let mut e=s.engine.lock().unwrap();
  e.next=engine::next_event(&settings,usage.as_ref(),&e,now());
 }
-fn confirmed_primary(new:&api::Usage,prev:Option<&api::Usage>)->bool{
- let new_used=new.five_hour.unwrap_or(0.);
- if new_used>0.0001{return true;}
- let fresh=engine::reset_timestamp(new.five_reset.as_ref());
- let timestamp=now();
- // A valid 5h reset inside the current five-hour span means the window
- // has already started, even when no quota has yet been consumed.
- // This must match the pre-trigger refresh guard on the very first sample.
- if new.five_hour.is_some() && fresh.is_some_and(|r|
-     r>timestamp && r<=timestamp+5*3600+60){return true;}
- let Some(old)=prev else{return false};
- let previous=engine::reset_timestamp(old.five_reset.as_ref());
- let old_confirmed=old.primary_confirmed && previous.is_some_and(|r|r>timestamp)
-  && fresh.zip(previous).is_some_and(|(a,b)|(a-b).abs()<=120);
- let elapsed=chrono::DateTime::parse_from_rfc3339(&old.checked_at)
-  .ok().map(|t|timestamp-t.timestamp()).unwrap_or(0).max(0);
- let fixed=elapsed>=15&&fresh.zip(previous)
-  .is_some_and(|(a,b)|(a-b).abs()<=std::cmp::max(5,elapsed/4));
- let natural_weekly=engine::reset_timestamp(old.weekly_reset.as_ref())
+// A zero-used primary window can contain a sliding now+5h placeholder.
+// Only real usage, a previously successful local trigger, or a stable
+// reset_at over multiple samples proves that a 5h window is running.
+fn confirmed_primary_at(new:&api::Usage,prev:Option<&api::Usage>,triggered_reset:Option<&String>,timestamp:i64)->bool{
+ if new.five_hour.is_some_and(|p|p>0.0001){return true;}
+ if new.five_hour.is_none(){return false;}
+ let Some(fresh)=engine::reset_timestamp(new.five_reset.as_ref())else{return false};
+ if fresh<=timestamp || fresh>timestamp+5*3600+60{return false;}
+ let natural_weekly=prev.and_then(|old|engine::reset_timestamp(old.weekly_reset.as_ref()))
   .is_some_and(|r|timestamp>=r-900&&timestamp<=r+3600);
- let unexpected_weekly=old.weekly.zip(new.weekly).is_some_and(|(a,b)|a-b>2.)&&!natural_weekly;
- !unexpected_weekly && (old_confirmed||fixed)
+ let unexpected_weekly=prev.is_some_and(|old|
+  old.weekly.zip(new.weekly).is_some_and(|(a,b)|a-b>2.))&&!natural_weekly;
+ if unexpected_weekly{return false;}
+ // Persisted only after this app's trigger request has completed.
+ if engine::reset_timestamp(triggered_reset).is_some_and(|r|(fresh-r).abs()<=10){return true;}
+ let Some(old)=prev else{return false};
+ if old.five_hour.is_none(){return false;}
+ let Some(previous)=engine::reset_timestamp(old.five_reset.as_ref())else{return false};
+ if previous<=timestamp{return false;}
+ let Some(elapsed)=chrono::DateTime::parse_from_rfc3339(&old.checked_at)
+  .ok().map(|t|timestamp-t.timestamp())else{return false};
+ // Wait >=2 minutes to distinguish a real fixed window from a rounded
+ // sliding placeholder. A placeholder typically moves with elapsed time.
+ if !(120..=6*3600).contains(&elapsed){return false;}
+ let drift=(fresh-previous).abs();
+ drift<=std::cmp::max(10,elapsed/5)
 }
 #[cfg(test)]
 mod five_hour_detection_tests{
  use super::*;
- fn usage(reset:i64,used:f64)->api::Usage{
+ fn usage(at:i64,reset:i64,used:f64)->api::Usage{
   api::Usage{
    five_hour:Some(used),
    five_reset:Some(chrono::DateTime::<chrono::Utc>::from_timestamp(reset,0).unwrap().to_rfc3339()),
+   checked_at:chrono::DateTime::<chrono::Utc>::from_timestamp(at,0).unwrap().to_rfc3339(),
    ..api::Usage::default()
   }
  }
- #[test]
- fn active_zero_usage_is_detected_at_first_refresh(){
-  // An anchored 06:00 window may still have 100% remaining at 10:10.
-  let q=usage(now()+50*60,0.);
-  assert!(confirmed_primary(&q,None));
+ #[test]fn first_idle_sample_does_not_activate_five_hour(){
+  let t=1_800_000_000;
+  assert!(!confirmed_primary_at(&usage(t,t+5*3600,0.),None,None,t));
+  assert!(!confirmed_primary_at(&usage(t,t+50*60,0.),None,None,t));
  }
- #[test]
- fn no_reset_means_not_yet_confirmed(){
-  let q=api::Usage{five_hour:Some(0.),..api::Usage::default()};
-  assert!(!confirmed_primary(&q,None));
+ #[test]fn sliding_reset_follows_the_clock_without_starting_a_window(){
+  let t=1_800_000_000;
+  let old=usage(t,t+5*3600,0.);
+  let next=usage(t+360,t+360+5*3600,0.);
+  // Exactly the screenshot's 04:47 -> 09:47 hypothetical idle case.
+  assert!(!confirmed_primary_at(&next,Some(&old),None,t+360));
+  let mut buggy=old.clone();buggy.primary_confirmed=true;
+  assert!(!confirmed_primary_at(&next,Some(&buggy),None,t+360));
  }
- #[test]
- fn far_future_reset_does_not_assert_current_window(){
-  let q=usage(now()+2*24*3600,0.);
-  assert!(!confirmed_primary(&q,None));
+ #[test]fn fixed_reset_is_confirmed_after_multiple_zero_usage_samples(){
+  let t=1_800_000_000;
+  let old=usage(t,t+5*3600,0.);
+  let next=usage(t+360,t+5*3600,0.);
+  assert!(confirmed_primary_at(&next,Some(&old),None,t+360));
+  assert!(!confirmed_primary_at(&next,None,None,t+360));
+ }
+ #[test]fn explicit_success_and_used_quota_confirm_the_window(){
+  let t=1_800_000_000;
+  let next=usage(t,t+5*3600,0.);
+  assert!(confirmed_primary_at(&next,None,next.five_reset.as_ref(),t));
+  assert!(confirmed_primary_at(&usage(t,t+5*3600,0.1),None,None,t));
+ }
+ #[test]fn invalid_and_stale_reset_are_not_confirmed(){
+  let t=1_800_000_000;
+  let prev=usage(t-300,t+5*3600,0.);
+  assert!(!confirmed_primary_at(&usage(t,t-10,0.),Some(&prev),None,t));
+  assert!(!confirmed_primary_at(&usage(t,t+2*24*3600,0.),Some(&prev),None,t));
+ }
+ #[test]fn global_weekly_refill_does_not_confirm_an_unchanged_idle_window(){
+  let t=1_800_000_000;
+  let mut old=usage(t,t+5*3600,0.);old.weekly=Some(40.);
+  let mut new=usage(t+360,t+5*3600,0.);new.weekly=Some(0.);
+  assert!(!confirmed_primary_at(&new,Some(&old),None,t+360));
  }
 }
 async fn refresh_internal(s:&State,force_aux:bool)->Result<api::Usage,String>{
@@ -165,7 +193,8 @@ async fn refresh_internal(s:&State,force_aux:bool)->Result<api::Usage,String>{
  let access=oauth::valid_access().await?;
  let mut value=api::fetch_usage(&access.token,access.account_id.as_deref()).await?;
  let before=s.usage.lock().unwrap().clone();
- value.primary_confirmed=confirmed_primary(&value,before.as_ref());
+ let confirmed_reset=storage::get_meta(&s.db.lock().unwrap(),"five_trigger_reset");
+ value.primary_confirmed=confirmed_primary_at(&value,before.as_ref(),confirmed_reset.as_ref(),now());
  {
   let db=s.db.lock().unwrap();
   storage::add_sample(&db,value.five_hour,value.weekly,value.five_reset.as_deref(),value.weekly_reset.as_deref())?;
@@ -273,8 +302,14 @@ async fn trigger(s:&State,followups:u8,kind:&str)->Result<(),String>{
  api::trigger_minimal(&access.token,access.account_id.as_deref()).await?;
  tokio::time::sleep(Duration::from_secs(2)).await;
  let mut after=refresh_internal(s,false).await?;
- // An accepted trigger explicitly confirms the current 5-hour window.
- after.primary_confirmed=after.five_reset.is_some();
+ // A completed minimal request is explicit evidence of a local 5h start.
+ // Persist it so a subsequent fast refresh does not clear confirmation.
+ after.primary_confirmed=engine::reset_timestamp(after.five_reset.as_ref()).is_some_and(|r|r>now());
+ if after.primary_confirmed{
+  let db=s.db.lock().unwrap();
+  storage::set_meta(&db,"five_trigger_reset",after.five_reset.as_deref())?;
+  storage::save_cached(&db,"last_usage",&after)?;
+ }
  *s.usage.lock().unwrap()=Some(after.clone());
  record(s,"trigger",&format!("{kind}觸發成功"));
  if followups>0&&after.primary_confirmed{
@@ -311,7 +346,11 @@ async fn consume(s:&State,allow_partial:bool,selected:Option<String>)->Result<()
  let windows=api::consume_credit(&access.token,access.account_id.as_deref(),&credit.id).await?;
  if windows<=0{return Err("OpenAI 未確認重置任何配額視窗；請重新整理官方 Usage 確認 Banked Reset 仍在，避免重複嘗試".into())}
  *s.armed.lock().unwrap()=None;
- storage::set_meta(&s.db.lock().unwrap(),"banked_armed",None)?;
+ {
+  let db=s.db.lock().unwrap();
+  storage::set_meta(&db,"banked_armed",None)?;
+  storage::set_meta(&db,"five_trigger_reset",None)?;
+ }
  tokio::time::sleep(Duration::from_secs(1)).await;
  let _=refresh_internal(s,true).await;
  record(s,"banked_reset",&format!("Banked Reset 已使用 · 重置 {windows} 個視窗"));
@@ -350,6 +389,7 @@ async fn consume(s:&State,allow_partial:bool,selected:Option<String>)->Result<()
  android_bridge::clear_auth()?;
  *s.usage.lock().unwrap()=None;*s.credits.lock().unwrap()=None;
  *s.armed.lock().unwrap()=None;
+ storage::set_meta(&s.db.lock().unwrap(),"five_trigger_reset",None)?;
  storage::set_meta(&s.db.lock().unwrap(),"banked_armed",None)?;
  {
   let mut settings=s.settings.lock().unwrap();settings.mode=schedule::Mode::Off;
