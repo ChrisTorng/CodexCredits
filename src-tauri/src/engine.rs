@@ -1,14 +1,14 @@
 //! In-process scheduler. Unlike Android AlarmManager it cannot run when the
 //! desktop process is stopped; stale events (>90s) are skipped on resume.
 use chrono::{DateTime,Local,Utc};
-use serde::Serialize;
-use crate::{api::Usage,schedule::{Mode,Settings}};
+use serde::{Serialize,Deserialize};
+use crate::{api::Usage,schedule::{Mode,Settings,MissedAnchorPolicy}};
 const RESET_GRACE_SEC:i64=15;
 const TOLERANCE_SEC:i64=60;
 
 #[derive(Debug,Clone,Copy,PartialEq,Eq,Serialize)]
 #[serde(rename_all="snake_case")]
-pub enum Kind{Auto,Anchor,AnchorRetry,Chain}
+pub enum Kind{Auto,Anchor,AnchorRetry,Chain,Recovery}
 #[derive(Debug,Clone,Serialize)]
 pub struct Next {
  pub at:i64,
@@ -16,11 +16,15 @@ pub struct Next {
  pub auto_count:u8,
  pub reason:String,
 }
+#[derive(Debug,Clone,Copy,Serialize,Deserialize,PartialEq,Eq)]
+pub struct Recovery{pub anchor_at:i64,pub at:i64,pub auto_count:u8}
 #[derive(Debug,Default)]
 pub struct Engine {
  pub next:Option<Next>,
  pub chain_remaining:u8,
  pub chain_reset:Option<i64>,
+ pub recovery:Option<Recovery>,
+ pub recovery_done_anchor:i64,
 }
 pub fn reset_timestamp(iso:Option<&String>)->Option<i64>{
  iso.and_then(|s|DateTime::parse_from_rfc3339(s).ok()).map(|t|t.timestamp())
@@ -70,14 +74,38 @@ pub fn next_event(settings:&Settings,usage:Option<&Usage>,engine:&Engine,now:i64
    }else{None};
    // Never chain into an anchor's next 5-hour window.
    let chain=chain.filter(|c|anchor.as_ref().is_none_or(|a|a.at>=c.at+5*3600-TOLERANCE_SEC));
-   match (anchor,chain){
-    (Some(a),Some(c))=>Some(if c.at<a.at{c}else{a}),
-    (Some(a),None)=>Some(a),
-    (None,Some(c))=>Some(c),
-    _=>None
-   }
+   let recovery=engine.recovery.map(|r|Next{
+    at:r.at.max(now+1),kind:Kind::Recovery,auto_count:r.auto_count,
+    reason:format!("錨點錯過 · 補接續，後續自動 {} 次",r.auto_count)
+   });
+   [anchor,chain,recovery].into_iter().flatten().min_by_key(|v|v.at)
   }
  }
+}
+/// Determine a same-day recovery from the confirmed pre-existing 5h window.
+pub fn missed_today(settings:&Settings,usage:&Usage,now:i64)->Option<Recovery>{
+ if settings.mode!=Mode::Custom||settings.missed_anchor_policy==MissedAnchorPolicy::SkipToday{return None;}
+ if !confirmed(usage,now){return None;}
+ let reset=reset_timestamp(usage.five_reset.as_ref())?;
+ let start=reset-5*3600;
+ let local=DateTime::<Utc>::from_timestamp(now,0)?.with_timezone(&Local);
+ let date=local.date_naive();
+ let mut best:Option<Recovery>=None;
+ for rule in settings.rules_for_date(date).into_iter().filter(|r|r.valid()){
+  let anchor=date.and_hms_opt(rule.hour,rule.minute,0)?.and_local_timezone(Local).earliest()?.timestamp();
+  if now<anchor||now>=anchor+5*3600||start>=anchor-2{continue;}
+  let (at,count)=match settings.missed_anchor_policy{
+   MissedAnchorPolicy::AtReset=>(reset+RESET_GRACE_SEC,rule.auto_count),
+   MissedAnchorPolicy::NextSlot if rule.auto_count>0=>((anchor+5*3600).max(reset+RESET_GRACE_SEC),rule.auto_count-1),
+   _=>continue
+  };
+  // A delayed recovery must not occupy the next independent anchor's 5h slot.
+  let next=DateTime::<Utc>::from_timestamp(anchor+1,0)?.with_timezone(&Local);
+  if settings.next_slot(next).is_some_and(|(slot,_)|at+5*3600>slot.timestamp()+TOLERANCE_SEC){continue;}
+  let candidate=Recovery{anchor_at:anchor,at,auto_count:count};
+  if best.is_none_or(|old|candidate.anchor_at>old.anchor_at){best=Some(candidate);}
+ }
+ best
 }
 pub fn is_stale(now:i64,at:i64)->bool{now-at>90}
 #[cfg(test)]mod tests{
@@ -93,6 +121,35 @@ pub fn is_stale(now:i64,at:i64)->bool{now-at>90}
  }
  #[test]fn guard_blocks_weekly_exhaustion(){let u=Usage{allowed:true,weekly:Some(100.),..Usage::default()};assert!(can_trigger(&u,0).is_err());}
  #[test]fn stale_event_is_not_replayed(){assert!(is_stale(200,1));assert!(!is_stale(100,90));}
+ #[test]fn missed_anchor_policy_today_three_choices(){
+  let mut s=Settings::default();s.mode=Mode::Custom;
+  let date=Local::now().date_naive();
+  let anchor=date.and_hms_opt(6,0,0).unwrap().and_local_timezone(Local).earliest().unwrap().timestamp();
+  let now=anchor+78*60;let reset=anchor+3*3600+47*60;
+  let q=Usage{five_hour:Some(0.),primary_confirmed:true,
+   five_reset:Some(DateTime::<Utc>::from_timestamp(reset,0).unwrap().to_rfc3339()),..Default::default()};
+  let r=missed_today(&s,&q,now).unwrap();
+  assert_eq!((r.at,r.auto_count),(anchor+5*3600,2));
+  let e=Engine{recovery:Some(r),..Default::default()};
+  assert_eq!(next_event(&s,Some(&q),&e,now).unwrap().kind,Kind::Recovery);
+  // A five-hour window started just ten seconds before 06:00 still
+  // prevents the anchor and must recover today (not tomorrow).
+  let early=Usage{five_hour:Some(0.),primary_confirmed:true,
+   five_reset:Some(DateTime::<Utc>::from_timestamp(anchor+5*3600-10,0).unwrap().to_rfc3339()),..Default::default()};
+  assert_eq!(missed_today(&s,&early,now).unwrap().at,anchor+5*3600+5);
+  s.missed_anchor_policy=MissedAnchorPolicy::AtReset;
+  let r=missed_today(&s,&q,now).unwrap();
+  assert_eq!((r.at,r.auto_count),(reset+15,3));
+  s.missed_anchor_policy=MissedAnchorPolicy::SkipToday;
+  assert!(missed_today(&s,&q,now).is_none());
+ }
+ #[test]fn window_started_at_anchor_never_causes_recovery(){
+  let mut s=Settings::default();s.mode=Mode::Custom;
+  let date=Local::now().date_naive();
+  let a=date.and_hms_opt(6,0,0).unwrap().and_local_timezone(Local).earliest().unwrap().timestamp();
+  let q=Usage{five_hour:Some(0.),primary_confirmed:true,five_reset:Some(DateTime::<Utc>::from_timestamp(a+5*3600,0).unwrap().to_rfc3339()),..Default::default()};
+  assert!(missed_today(&s,&q,a+3600).is_none());
+ }
  #[test]fn exhausted_weekly_retry_is_rate_limited(){let mut s=Settings::default();s.mode=Mode::Auto;
   let now=Utc::now().timestamp();
   let u=Usage{allowed:true,weekly:Some(100.),weekly_reset:Some(DateTime::<Utc>::from_timestamp(now-100,0).unwrap().to_rfc3339()),..Usage::default()};

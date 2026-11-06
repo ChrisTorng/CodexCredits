@@ -199,7 +199,14 @@ public final class LegacyBridge {
             e.putString("theme_mode",s.optString("theme","system"));
             e.putBoolean("android_notifications_enabled",s.optBoolean("native_notify_enabled",true));
             e.putString("ntfy_url",s.optString("ntfy_topic",""));
-            e.putString("schedule_weekly_v2",convertRules(s.optJSONArray("rules")).toString());
+            String oldWeekly=p.getString("schedule_weekly_v2","");
+            String newWeekly=convertRules(s.optJSONArray("rules")).toString();
+            String policy=s.optString("missed_anchor_policy","next_slot");
+            if(!"at_reset".equals(policy)&&!"next_slot".equals(policy)&&!"skip_today".equals(policy))
+                throw new IllegalArgumentException("Unsupported missed-anchor policy");
+            String oldPolicy=p.getString("missed_anchor_policy","next_slot");
+            e.putString("missed_anchor_policy",policy);
+            e.putString("schedule_weekly_v2",newWeekly);
 
             JSONObject converted=new JSONObject();
             JSONObject overrides=s.optJSONObject("overrides");
@@ -212,8 +219,12 @@ public final class LegacyBridge {
                         .put("rules",convertRules(o.optJSONArray("rules"))));
                 }
             }
+            String oldOverrides=p.getString("schedule_day_overrides_v2","");
             e.putString("schedule_day_overrides_v2",converted.toString());
             if(!e.commit())throw new IllegalStateException("SharedPreferences commit failed");
+            if(!oldPolicy.equals(policy)||!oldWeekly.equals(newWeekly)
+                    ||!oldOverrides.equals(converted.toString()))
+                Scheduler.clearRecovery(c);
             Scheduler.setMode(c,legacyMode);
             Scheduler.scheduleQuotaSampling(c);
             return "ok";

@@ -4,6 +4,14 @@ use std::collections::BTreeMap;
 #[derive(Debug,Clone,Serialize,Deserialize,PartialEq,Eq)]
 #[serde(rename_all="snake_case")]
 pub enum Mode {Off,Auto,Custom}
+/// What to do when the scheduled anchor falls inside an existing 5h window.
+#[derive(Debug,Clone,Copy,PartialEq,Eq,Serialize,Deserialize,Default)]
+#[serde(rename_all="snake_case")]
+pub enum MissedAnchorPolicy{
+ AtReset,
+ #[default] NextSlot,
+ SkipToday,
+}
 #[derive(Debug,Clone,Serialize,Deserialize)]
 pub struct Rule {
  pub id:String,pub enabled:bool,pub days:[bool;7],pub hour:u32,pub minute:u32,pub auto_count:u8
@@ -20,6 +28,7 @@ fn default_theme()->String{"system".into()}
 #[derive(Debug,Clone,Serialize,Deserialize)]
 pub struct Settings {
  pub mode:Mode,
+ #[serde(default)]pub missed_anchor_policy:MissedAnchorPolicy,
  #[serde(default="default_sampling")]pub sampling_minutes:u64,
  #[serde(default="default_retention")]pub retention_days:i64,
  pub rules:Vec<Rule>,
@@ -29,7 +38,7 @@ pub struct Settings {
  #[serde(default)]pub native_notify_enabled:bool,
 }
 impl Default for Settings{
- fn default()->Self{Self{mode:Mode::Off,sampling_minutes:10,retention_days:8,rules:vec![Rule::default()],overrides:BTreeMap::new(),ntfy_topic:String::new(),theme:"system".into(),native_notify_enabled:false}}
+ fn default()->Self{Self{mode:Mode::Off,missed_anchor_policy:MissedAnchorPolicy::default(),sampling_minutes:10,retention_days:8,rules:vec![Rule::default()],overrides:BTreeMap::new(),ntfy_topic:String::new(),theme:"system".into(),native_notify_enabled:false}}
 }
 impl Settings{
  pub fn valid(&self)->bool{
@@ -126,7 +135,14 @@ pub fn conflict_ids(rules:&[Rule],weekly:bool)->Vec<String>{
 }
 #[cfg(test)]mod tests{
  use super::*;
- #[test]fn defaults(){let s=Settings::default();assert_eq!(s.mode,Mode::Off);assert_eq!(s.retention_days,8);assert!(s.valid());}
+ #[test]fn defaults(){let s=Settings::default();assert_eq!(s.mode,Mode::Off);assert_eq!(s.missed_anchor_policy,MissedAnchorPolicy::NextSlot);assert_eq!(s.retention_days,8);assert!(s.valid());}
+ #[test]fn migration_missing_policy_defaults_to_next_slot(){
+  let s=Settings::default();
+  let mut value=serde_json::to_value(&s).unwrap();
+  value.as_object_mut().unwrap().remove("missed_anchor_policy");
+  let migrated:Settings=serde_json::from_value(value).unwrap();
+  assert_eq!(migrated.missed_anchor_policy,MissedAnchorPolicy::NextSlot);
+ }
  #[test]fn daily_three(){let r=Rule::default();assert_eq!(safe_followups(&r,&[r.clone()]),3);}
  #[test]fn next_anchor_future(){let s=Settings::default();assert!(s.next_slot(Local::now()).unwrap().0>Local::now());}
  #[test]fn overrides_suppress_defaults(){let mut s=Settings::default();let day=Local::now().date_naive();s.overrides.insert(day.to_string(),Override{enabled:true,rules:vec![]});assert!(s.rules_for_date(day).is_empty());}

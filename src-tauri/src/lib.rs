@@ -68,6 +68,7 @@ fn native_next()->Option<engine::Next>{
  let at=platform["next_alarm_ms"].as_i64().unwrap_or(0)/1000;
  if at<=0{return None;}
  let kind=match platform["next_event_kind"].as_str().unwrap_or("auto"){
+  "recovery"=>engine::Kind::Recovery,
   "anchor"=>engine::Kind::Anchor,
   "anchor_retry"=>engine::Kind::AnchorRetry,
   "chain"=>engine::Kind::Chain,
@@ -108,7 +109,22 @@ fn replan(s:&State){
  let settings=s.settings.lock().unwrap().clone();
  let usage=s.usage.lock().unwrap().clone();
  let mut e=s.engine.lock().unwrap();
+ if settings.mode!=schedule::Mode::Custom{e.recovery=None;}
+ else if e.recovery.is_none(){
+  if let Some(ref usage)=usage{
+   if let Some(candidate)=engine::missed_today(&settings,usage,now()){
+    if candidate.anchor_at>e.recovery_done_anchor{e.recovery=Some(candidate);}
+   }
+  }
+ }
  e.next=engine::next_event(&settings,usage.as_ref(),&e,now());
+ let recovery=e.recovery;
+ let done=e.recovery_done_anchor;
+ drop(e);
+ let db=s.db.lock().unwrap();
+ let _=if let Some(r)=recovery{storage::save_cached(&db,"missed_anchor_recovery_v1",&r)}
+ else{storage::set_meta(&db,"missed_anchor_recovery_v1",None)};
+ let _=storage::set_meta(&db,"missed_anchor_recovery_done",&done.to_string());
 }
 // A zero-used primary window can contain a sliding now+5h placeholder.
 // Only real usage, a previously successful local trigger, or a stable
@@ -428,8 +444,15 @@ async fn consume(s:&State,allow_partial:bool,selected:Option<String>)->Result<()
  }
  #[cfg(target_os="android")]
  android_bridge::sync_settings(&serde_json::to_string(&settings).map_err(|e|e.to_string())?)?;
- let changed_mode=s.settings.lock().unwrap().mode!=settings.mode;
+ let old=s.settings.lock().unwrap().clone();
+ let changed_mode=old.mode!=settings.mode;
+ let changed_recovery=changed_mode||old.missed_anchor_policy!=settings.missed_anchor_policy
+  ||serde_json::to_string(&old.rules).ok()!=serde_json::to_string(&settings.rules).ok()
+  ||serde_json::to_string(&old.overrides).ok()!=serde_json::to_string(&settings.overrides).ok();
  *s.settings.lock().unwrap()=settings;
+ if changed_recovery{
+  let mut e=s.engine.lock().unwrap();e.recovery=None;e.recovery_done_anchor=0;
+ }
  if changed_mode{
   let mut e=s.engine.lock().unwrap();e.chain_remaining=0;e.chain_reset=None;
   record(&s,"mode","排程模式已變更");
@@ -461,7 +484,9 @@ async fn consume(s:&State,allow_partial:bool,selected:Option<String>)->Result<()
   #[cfg(target_os="android")]
   android_bridge::sync_settings(&serde_json::to_string(&copy).map_err(|e|e.to_string())?)?;
  }
- {let mut e=s.engine.lock().unwrap();e.chain_remaining=0;e.chain_reset=None;e.next=None;}
+ {let mut e=s.engine.lock().unwrap();e.chain_remaining=0;e.chain_reset=None;e.next=None;e.recovery=None;e.recovery_done_anchor=0;}
+ storage::set_meta(&s.db.lock().unwrap(),"missed_anchor_recovery_v1",None)?;
+ storage::set_meta(&s.db.lock().unwrap(),"missed_anchor_recovery_done",None)?;
  record(&s,"login","已登出；排程已關閉");
  Ok(snapshot(&s))
 }
@@ -538,6 +563,10 @@ async fn consume(s:&State,allow_partial:bool,selected:Option<String>)->Result<()
 }
 fn defer_scheduled_retry(s:&State,planned:&engine::Next,seconds:i64){
  let mut e=s.engine.lock().unwrap();
+ if planned.kind==engine::Kind::Recovery{
+  if let Some(ref mut r)=e.recovery{r.at=now()+seconds;}
+  drop(e);replan(s);return;
+ }
  e.next=Some(engine::Next{
   at:now()+seconds,kind:planned.kind,auto_count:planned.auto_count,
   reason:format!("失敗後 {} 分鐘再檢查",seconds/60),
@@ -554,6 +583,15 @@ async fn run_planned(s:&State,planned:engine::Next){
  let quota=match refresh_internal(s,false).await{
   Ok(v)=>v,Err(e)=>{record(s,"error",&format!("排程查詢失敗: {e}"));defer_scheduled_retry(s,&planned,900);return}
  };
+ if planned.kind==engine::Kind::Recovery&&engine::confirmed(&quota,now()){
+  if let Some(reset)=engine::reset_timestamp(quota.five_reset.as_ref()){
+   if reset>now(){
+    {let mut e=s.engine.lock().unwrap();if let Some(ref mut r)=e.recovery{r.at=reset+15;}}
+    record(s,"scheduler","補接續時現有 5h 仍有效，延至實際重置後");
+    replan(s);return;
+   }
+  }
+ }
  if mode==schedule::Mode::Custom&&engine::confirmed(&quota,now()){
   let remaining=engine::reset_timestamp(quota.five_reset.as_ref()).unwrap_or(now())-now();
   if remaining>=0&&remaining<=60{
@@ -572,7 +610,14 @@ async fn run_planned(s:&State,planned:engine::Next){
   else{planned.auto_count}
  }else{0};
  match trigger(s,followups,"排程").await{
-  Ok(TriggerOutcome::Started)=>{},
+  Ok(TriggerOutcome::Started)=>{
+   if planned.kind==engine::Kind::Recovery{
+    let mut e=s.engine.lock().unwrap();
+    if let Some(r)=e.recovery.take(){e.recovery_done_anchor=r.anchor_at;}
+    drop(e);
+    record(s,"scheduler","錨點失敗後已成功補接續");
+   }
+  },
   Ok(TriggerOutcome::Unchanged)=>{
    // If the existing window is still not locally confirmed, do not
    // issue another minimal request every 15 seconds.
@@ -641,13 +686,16 @@ pub fn run(){
   let cached_credits=storage::get_cached::<api::Credits>(&db,"last_credits");
   let cached_global=storage::get_cached::<api::Global>(&db,"last_global");
   let armed=storage::get_meta(&db,"banked_armed");
+  let recovery=storage::get_cached::<engine::Recovery>(&db,"missed_anchor_recovery_v1");
+  let recovery_done=storage::get_meta(&db,"missed_anchor_recovery_done")
+   .and_then(|v|v.parse::<i64>().ok()).unwrap_or(0);
   #[cfg(target_os="android")]
   let armed=if android_bridge::banked_armed().unwrap_or(false){Some("android-native".into())}else{armed};
   let state=Arc::new(State{
    app:handle.clone(),db:Mutex::new(db),settings:Mutex::new(settings),usage:Mutex::new(cached_usage),
    credits:Mutex::new(cached_credits),global:Mutex::new(cached_global),last_credits:Mutex::new(0),last_global:Mutex::new(0),
    ntfy_status:Mutex::new("尚未測試".into()),armed:Mutex::new(armed),
-   engine:Mutex::new(engine::Engine::default()),error:Mutex::new({
+   engine:Mutex::new(engine::Engine{recovery,recovery_done_anchor:recovery_done,..Default::default()}),error:Mutex::new({
     #[cfg(target_os="android")] {migration_error}
     #[cfg(not(target_os="android"))] {None}
    }),

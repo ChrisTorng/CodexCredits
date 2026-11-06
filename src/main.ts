@@ -15,9 +15,10 @@ import {nearestCredit,activeCreditsByExpiry,compactLocalDateTime,bankedCountdown
 import "./style.css";
 
 type Mode="off"|"auto"|"custom";
+type MissedPolicy="at_reset"|"next_slot"|"skip_today";
 type Rule={id:string;enabled:boolean;days:boolean[];hour:number;minute:number;auto_count:number};
 type Override={enabled:boolean;rules:Rule[]};
-type Settings={mode:Mode;sampling_minutes:number;retention_days:number;rules:Rule[];overrides:Record<string,Override>;ntfy_topic:string;theme:string;native_notify_enabled:boolean};
+type Settings={mode:Mode;missed_anchor_policy:MissedPolicy;sampling_minutes:number;retention_days:number;rules:Rule[];overrides:Record<string,Override>;ntfy_topic:string;theme:string;native_notify_enabled:boolean};
 type Usage={five_hour:number|null;weekly:number|null;five_reset:string|null;weekly_reset:string|null;primary_confirmed:boolean;plan:string;allowed:boolean;limit_reached:boolean;checked_at:string};
 type Credit={id:string;title:string;description:string;expires_at:string};
 type Snapshot={settings:Settings;usage:Usage|null;credits:{count:number;available:Credit[]}|null;global:{last_reset_at:string|null;age_days:number|null;p24:number|null;p48:number|null;avg_days:number|null;median_days:number|null;median_estimate_at:string|null}|null;armed:boolean;ntfy_status:string;next:{at:number;kind:string;reason:string;auto_count:number}|null;error:string|null;signed_in:boolean};
@@ -42,6 +43,7 @@ app.innerHTML=[
 '</main>',
 '<main class="page" id="page-schedule">',
 '<h3>模式</h3><div class="button-row mode-row"><select id="mode"><option value="off">關閉</option><option value="auto">配額重置後自動開始</option><option value="custom">錨點＋自動接續</option></select><button id="apply-mode">套用</button></div>',
+'<section id="missed-policy-block" class="card compact"><div class="setting-row"><label for="missed-policy">錨點被占用</label><select id="missed-policy"><option value="at_reset">A．視窗結束立即接續</option><option value="next_slot">B．下一個預定時段接續</option><option value="skip_today">C．今日停止接續</option></select></div><p class="note" id="missed-policy-hint">06:00 若已有 5h 視窗，改在 11:00 補接續，後續依實際重置時間執行。</p></section>',
 '<section class="card compact"><h2>下次執行</h2><p id="alarm">尚未排程</p></section>',
 '<section class="card compact"><h2>預估</h2><p id="schedule-preview">排程已關閉</p></section>',
 
@@ -389,6 +391,14 @@ function render(){
  const global=s.global;
  $("global-reset").textContent=globalResetSummary(global);
  ($("mode") as HTMLSelectElement).value=mode;
+ const policy=s.settings.missed_anchor_policy??"next_slot";
+ ($("missed-policy") as HTMLSelectElement).value=policy;
+ $("missed-policy-block").hidden=mode!=="custom";
+ $("missed-policy-hint").textContent=policy==="at_reset"
+  ?"錨點若已被其他有效 5h 視窗占用，等該視窗重置後立即補啟動，接著依實際 5h 重置時間繼續接續。":
+  policy==="next_slot"
+   ?"錨點失敗時保留今天排程：例如 06:00 失敗，11:00 補開始，之後在 16:00、21:00 依實際重置時間接續。若 11:00 仍有有效視窗，先等它結束。"
+   :"錨點失敗時取消該次錨點當日的所有後續接續，等下一個錨點再開始。";
  $("alarm").textContent=s.next?fdate(new Date(s.next.at*1000).toISOString())+" · "+s.next.reason:"尚未排程";
  $("schedule-preview").textContent=mode==="off"?"排程已關閉":mode==="auto"?"下一次以目前 quota reset 為基準":"下一錨點："+(s.next?fdate(new Date(s.next.at*1000).toISOString()):"尚未排程");
  $("weekly-summary").textContent=s.settings.rules.filter(r=>r.enabled).map(r=>ruleLabel(r,true)).join("\n")||"沒有錨點";
@@ -564,6 +574,9 @@ async function settingsPatch(patch:Partial<Settings>){
  catch(e){toast(String(e));}
 }
 $("theme").onchange=()=>{void settingsPatch({theme:($("theme") as HTMLSelectElement).value});};
+$("missed-policy").onchange=()=>{
+ void settingsPatch({missed_anchor_policy:($("missed-policy") as HTMLSelectElement).value as MissedPolicy});
+};
 $("native-toggle").onchange=async()=>{
  const enabled=($("native-toggle") as HTMLInputElement).checked;
  if(enabled&&notificationPermission===false){
