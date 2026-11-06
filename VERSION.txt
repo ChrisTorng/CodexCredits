@@ -1,4 +1,4 @@
-version=2.0.17
+version=2.0.18
 source_repo=ChrisTorng/CodexCredits
-source_run=42294378449
-sha256:cff8ab949ab9958c393b492547e85d35e5f8126c8eebe0b7e90507356c24a61d
+source_run=42300250916
+sha256:66c859e83cf9a4bfb6f0f23887ed2797a31cfbcb42dfa9a86d1caf03125372b0
