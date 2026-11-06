@@ -28,7 +28,7 @@ for name in names:
     text=source.read_text(encoding="utf-8")
     text=text.replace("Codex Tools","Codex Credits").replace(
         "Codex-Tools/0.1 (+https://github.com/ChrisTorng/android-codex-tools)",
-        "CodexCredits/2.0.18 (+https://github.com/ChrisTorng/CodexCredits)")
+        "CodexCredits/2.0.19 (+https://github.com/ChrisTorng/CodexCredits)")
     if name=="Scheduler":
         # Only staged Java is patched. Keep the pinned legacy repo read-only.
         marker="            e.apply();\n            UsageHistory.recordSnapshot(c,snapshot(c));"

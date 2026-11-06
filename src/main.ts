@@ -217,7 +217,9 @@ function paintQuota(id:string,used:number|null|undefined,reset:string|null|undef
   const t=Date.parse(x.at),r=weekly?x.weekly_reset:x.five_reset;
   return t>=start-60000&&t<=until+60000&&r&&Math.abs(Date.parse(r)-until)<=120000;
  }):[];
- const valid=resetKnown&&(weekly||confirmed||source.length>0);
+ // Unconfirmed reset_at can be a sliding placeholder. A sample alone
+ // must not create 04:47–09:47 boundaries on the status card.
+ const valid=resetKnown&&(weekly||confirmed);
  const color=weekly?"#e89134":"#2f80ed";
  const actual=source.map(x=>[Date.parse(x.at),safeRemaining(weekly?x.weekly:x.five_hour)]);
  // Unconfirmed historical samples never justify an invented ideal 5h slope.
@@ -491,9 +493,17 @@ document.addEventListener("visibilitychange",()=>{if(!document.hidden)void refre
 window.addEventListener("focus",()=>{void refreshIfStale();});
 $("top-refresh").onclick=refresh;$("check").onclick=refresh;
 $("trigger").onclick=async()=>{
- if(!confirm("將發送最小 Codex 請求以開始 5 小時視窗，可能消耗用量。確定開始？"))return;
- try{await call("manual_trigger");toast("5h 已開始");await refresh();}
- catch(e){toast("5h 開始失敗："+String(e));}
+ if(!confirm("將發送最小 Codex 請求，嘗試開始新的 5h 視窗；若已有有效視窗，不會重新開始，且可能消耗用量。確定送出？"))return;
+ const button=$("trigger") as HTMLButtonElement;
+ button.disabled=true;
+ try{
+  const result=await call<"started"|"unchanged"|"pending">("manual_trigger");
+  await loadLocalState();
+  if(result==="started")toast("已確認建立新的 5h 視窗");
+  else if(result==="unchanged")toast("Codex 請求已完成，但官方 5h 重置時間未改變；沒有重新開始新視窗");
+  else toast("Codex 請求已完成；目前尚無法確認新的 5h 視窗，請稍後更新用量");
+ }catch(e){toast("Codex 請求未完成："+String(e));await loadLocalState();}
+ finally{if(snapshot)render();}
 };
 $("reset-action").onclick=()=>{
  const s=snapshot;if(!s)return;

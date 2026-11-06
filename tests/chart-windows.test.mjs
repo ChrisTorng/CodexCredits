@@ -116,11 +116,13 @@ test("history labels use the configured 06/11/16/21 anchors instead of 06/12/18"
  assert.deepEqual(overridden.map(t=>new Date(t).getHours()),[7,12]);
  assert.deepEqual(historyScheduleGuides([],day,day+86400000),[]);
 });
-test("only a successful trigger provides event evidence, not scheduled future slots",()=>{
+test("only a server-verified new window provides event evidence",()=>{
  const at=Date.parse("2026-11-04T06:00:00Z"),now=at+6*3600000;
  const events=[
-  {at:new Date(at).toISOString(),kind:"trigger",detail:"錨點觸發成功"},
+  {at:new Date(at).toISOString(),kind:"trigger",detail:"錨點5h 視窗啟動已確認"},
   {at:new Date(at+5*3600000).toISOString(),kind:"scheduler",detail:"排程設定"},
+  {at:new Date(at+2*3600000).toISOString(),kind:"trigger",detail:"手動觸發成功"},
+  {at:new Date(at+3*3600000).toISOString(),kind:"trigger_no_change",detail:"Codex 請求成功但 5h 未重新開始"},
   {at:new Date(now+3600000).toISOString(),kind:"trigger",detail:"手動觸發成功"}
  ];
  const observed=eventConfirmedFiveHourWindows(events,[],now);
