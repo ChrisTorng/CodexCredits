@@ -56,6 +56,21 @@ pub fn can_trigger(usage:&Usage,now:i64)->Result<(),String>{
  if confirmed(usage,now){return Err("5 小時視窗仍有效，請等待重置後再觸發".into());}
  Ok(())
 }
+/// Predicted end of the active window and an already-started continuation chain.
+/// Future times are advisory: execution rechecks the official reset.
+pub fn projected_busy_until(usage:Option<&Usage>,engine:&Engine,now:i64)->Option<i64>{
+ let active=usage.filter(|u|confirmed(u,now))
+  .and_then(|u|reset_timestamp(u.five_reset.as_ref())).unwrap_or(0);
+ let mut end=active;
+ if engine.chain_remaining>0 {
+  let chain_base=engine.chain_reset.unwrap_or(0).max(active);
+  if chain_base>0{end=end.max(chain_base.saturating_add(engine.chain_remaining as i64*5*3600));}
+ }
+ if let Some(pending)=engine.pending{
+  end=end.max(pending.expected_reset.saturating_add(pending.auto_count as i64*5*3600));
+ }
+ if end>now{Some(end)}else{None}
+}
 /// One-shot day override: continue at the *actual* confirmed reset, never at a
 /// guessed fixed anchor. If no window is running, it becomes eligible now (or
 /// at the start of the selected future date). An entry is consumed once.
@@ -71,7 +86,8 @@ pub fn next_day_resume(settings:&Settings,usage:Option<&Usage>,engine:&Engine,no
    .and_local_timezone(Local).earliest()?.timestamp();
   let reset=usage.filter(|u|confirmed(u,now))
    .and_then(|u|reset_timestamp(u.five_reset.as_ref())).unwrap_or(0);
-  let mut at=now.max(start).max(reset)+RESET_GRACE_SEC;
+  let reserved=projected_busy_until(usage,engine,now).unwrap_or(0);
+  let mut at=now.max(start).max(reset).max(reserved)+RESET_GRACE_SEC;
   if offset==0{at=at.max(engine.resume_retry_at.unwrap_or(0));}
   if at>=end{continue;}
   let next_local=DateTime::<Utc>::from_timestamp(at-1,0)?.with_timezone(&Local);
@@ -238,7 +254,22 @@ pub fn is_stale(now:i64,at:i64)->bool{now-at>90}
    assert_eq!(next.at,tomorrow_reset+RESET_GRACE_SEC);
    assert_eq!(next.kind,Kind::Resume);
   }
-  #[test]fn day_resume_without_active_window_starts_at_earliest_time(){
+  #[test]fn tomorrow_resume_waits_for_todays_chain_across_midnight(){
+    let mut s=Settings::default();s.mode=Mode::Custom;
+    let today=Local::now().date_naive();
+    let tomorrow=today+Duration::days(1);
+    s.overrides.insert(tomorrow.to_string(),crate::schedule::Override{
+     enabled:true,rules:vec![],resume_auto_count:Some(2)});
+    let tomorrow_start=tomorrow.and_hms_opt(0,0,0).unwrap().and_local_timezone(Local).earliest().unwrap().timestamp();
+    let now=tomorrow_start-2*3600;
+    let reset=tomorrow_start+3600;
+    let q=Usage{primary_confirmed:true,five_reset:Some(DateTime::<Utc>::from_timestamp(reset,0).unwrap().to_rfc3339()),..Default::default()};
+    let e=Engine{chain_remaining:3,chain_reset:Some(reset),..Default::default()};
+    let n=next_day_resume(&s,Some(&q),&e,now).unwrap();
+    assert_eq!(n.at,reset+3*5*3600+RESET_GRACE_SEC);
+    assert_eq!(n.auto_count,2);
+   }
+   #[test]fn day_resume_without_active_window_starts_at_earliest_time(){
    let mut s=Settings::default();s.mode=Mode::Custom;
    let date=Local::now().date_naive();
    s.overrides.insert(date.to_string(),crate::schedule::Override{
