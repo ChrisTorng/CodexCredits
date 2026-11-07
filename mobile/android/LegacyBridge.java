@@ -199,7 +199,14 @@ public final class LegacyBridge {
             e.putString("theme_mode",s.optString("theme","system"));
             e.putBoolean("android_notifications_enabled",s.optBoolean("native_notify_enabled",true));
             e.putString("ntfy_url",s.optString("ntfy_topic",""));
-            e.putString("schedule_weekly_v2",convertRules(s.optJSONArray("rules")).toString());
+            String oldWeekly=p.getString("schedule_weekly_v2","");
+            String newWeekly=convertRules(s.optJSONArray("rules")).toString();
+            String policy=s.optString("missed_anchor_policy","next_slot");
+            if(!"at_reset".equals(policy)&&!"next_slot".equals(policy)&&!"skip_today".equals(policy))
+                throw new IllegalArgumentException("Unsupported missed-anchor policy");
+            String oldPolicy=p.getString("missed_anchor_policy","next_slot");
+            e.putString("missed_anchor_policy",policy);
+            e.putString("schedule_weekly_v2",newWeekly);
 
             JSONObject converted=new JSONObject();
             JSONObject overrides=s.optJSONObject("overrides");
@@ -209,11 +216,16 @@ public final class LegacyBridge {
                     JSONObject o=overrides.optJSONObject(date);
                     if(o!=null)converted.put(date,new JSONObject()
                         .put("enabled",o.optBoolean("enabled"))
-                        .put("rules",convertRules(o.optJSONArray("rules"))));
+                        .put("rules",convertRules(o.optJSONArray("rules")))
+                        .put("resumeAutoCount",o.has("resume_auto_count") && !o.isNull("resume_auto_count") ? o.optInt("resume_auto_count") : JSONObject.NULL));
                 }
             }
+            String oldOverrides=p.getString("schedule_day_overrides_v2","");
             e.putString("schedule_day_overrides_v2",converted.toString());
             if(!e.commit())throw new IllegalStateException("SharedPreferences commit failed");
+            if(!oldPolicy.equals(policy)||!oldWeekly.equals(newWeekly)
+                    ||!oldOverrides.equals(converted.toString()))
+                {Scheduler.clearRecovery(c);Scheduler.clearDailyResume(c);}
             Scheduler.setMode(c,legacyMode);
             Scheduler.scheduleQuotaSampling(c);
             return "ok";
@@ -234,6 +246,7 @@ public final class LegacyBridge {
                     .put("hour",r.optInt("hour",6))
                     .put("minute",r.optInt("minute",0))
                     .put("autoCount",r.optInt("auto_count",0))
+                     .put("startKind",r.optString("start_kind","anchor"))
                     .put("days",bits.toString()));
             }catch(Exception ignored){}
         }

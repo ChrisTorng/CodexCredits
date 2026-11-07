@@ -21,14 +21,14 @@ names=["AlarmReceiver","AndroidNotifications","BackupJobService","BootReceiver",
        "CodexClient","SamplingJobService","ScheduleConfig","Scheduler",
        "SecureStore","UsageHistory"]
 for name in names:
-    # Only UsageHistory is patched: retain the original Android scheduler and
-    # correct Global Reset identification for operator-observed events.
-    source=(Path("mobile/android")/(name+".java")) if name=="UsageHistory" else (old/(name+".java"))
+    # Stage maintained Scheduler with missed-anchor recovery; keep original repo read-only.
+    # UsageHistory retains corrected operator-observed Global Reset identification.
+    source=(Path("mobile/android")/(name+".java")) if name in ("UsageHistory","Scheduler","CodexClient","ScheduleConfig") else (old/(name+".java"))
     # Rename user-visible strings only in staged copies; legacy source is read-only.
     text=source.read_text(encoding="utf-8")
     text=text.replace("Codex Tools","Codex Credits").replace(
         "Codex-Tools/0.1 (+https://github.com/ChrisTorng/android-codex-tools)",
-        "CodexCredits/2.0.19 (+https://github.com/ChrisTorng/CodexCredits)")
+        "CodexCredits/2.0.20 (+https://github.com/ChrisTorng/CodexCredits)")
     if name=="Scheduler":
         # Only staged Java is patched. Keep the pinned legacy repo read-only.
         marker="            e.apply();\n            UsageHistory.recordSnapshot(c,snapshot(c));"
@@ -68,6 +68,9 @@ class MainActivity : TauriActivity() {
         ViewCompat.requestApplyInsets(root)
         AndroidNotifications.ensureChannel(this)
         Scheduler.scheduleQuotaSampling(this)
+        // Restore missed-anchor recovery on upgrade/foreground even if the
+        // previous native alarm had already been skipped.
+        Scheduler.reschedule(this)
     }
 }
 """)

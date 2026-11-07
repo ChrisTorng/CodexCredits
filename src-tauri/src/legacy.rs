@@ -60,7 +60,8 @@ fn settings(p:&Value)->Result<Settings,String>{
         for (date,override_day) in object{
             s.overrides.insert(date.clone(),Override{
                 enabled:override_day.get("enabled").and_then(Value::as_bool).unwrap_or(false),
-                rules:converted_rules(override_day.get("rules").unwrap_or(&Value::Null))
+                rules:converted_rules(override_day.get("rules").unwrap_or(&Value::Null)),
+                resume_auto_count:override_day.get("resumeAutoCount").and_then(Value::as_u64).map(|v|v.min(6) as u8)
             });
         }
     }

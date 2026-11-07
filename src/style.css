@@ -69,6 +69,12 @@ small{font-size:11px;color:var(--sub);line-height:1.4}
 .banked .meta{font-size:12px;line-height:1.45;white-space:pre-line;overflow-wrap:anywhere}
 .mode-row select{flex:1;min-width:0}
 .mode-row button{flex:0 0 84px}
+#missed-policy-block{margin:5px 0 8px;padding:6px 10px}
+#missed-policy-block .setting-row{min-height:42px}
+#missed-policy-block label{flex:0 0 90px}
+#missed-policy-block select{font-size:13px}
+#missed-policy-block .note{font-size:12px;line-height:1.45;padding:2px 0 3px}
+#missed-policy-block[hidden]{display:none}
 #page-schedule .editor-card{padding:8px 11px}
 .editor-card .card-title>strong{color:var(--sub)}
 .editor-card .card-title .small{flex:0 0 72px;min-height:40px}
@@ -154,3 +160,12 @@ button.primary{color:#fff;background:var(--blue);border-color:var(--blue)}
  .history-charts{min-height:240px}
  .history-events{flex-basis:195px}
 }
+
+/* The day editor can choose a reset-driven first start instead of a fixed clock. */
+.day-resume-row{display:flex;flex-direction:column;gap:7px;margin:8px 0;padding:8px 10px;border-radius:10px;border:1px solid var(--border)}
+.day-resume-row label{display:flex;gap:8px;align-items:center;font-size:14px}
+.day-resume-row input{width:18px;min-height:18px}
+.day-resume-row select{margin-left:auto;min-width:78px;min-height:36px}
+.day-resume-row .note{margin:2px 0 0}
+.rule-kind{min-width:92px;max-width:120px;min-height:36px}
+.day-resume-row[hidden],.rule-card[hidden],.rule-chain[hidden],.time-input[hidden]{display:none!important}

@@ -68,6 +68,8 @@ fn native_next()->Option<engine::Next>{
  let at=platform["next_alarm_ms"].as_i64().unwrap_or(0)/1000;
  if at<=0{return None;}
  let kind=match platform["next_event_kind"].as_str().unwrap_or("auto"){
+  "recovery"=>engine::Kind::Recovery,
+  "resume"=>engine::Kind::Resume,
   "anchor"=>engine::Kind::Anchor,
   "anchor_retry"=>engine::Kind::AnchorRetry,
   "chain"=>engine::Kind::Chain,
@@ -108,7 +110,31 @@ fn replan(s:&State){
  let settings=s.settings.lock().unwrap().clone();
  let usage=s.usage.lock().unwrap().clone();
  let mut e=s.engine.lock().unwrap();
+ if settings.mode!=schedule::Mode::Custom{e.recovery=None;}
+ else if e.recovery.is_none(){
+  if let Some(ref usage)=usage{
+   if let Some(candidate)=engine::missed_today(&settings,usage,now()){
+    if candidate.anchor_at>e.recovery_done_anchor{e.recovery=Some(candidate);}
+   }
+  }
+ }
  e.next=engine::next_event(&settings,usage.as_ref(),&e,now());
+ let recovery=e.recovery;
+ let pending=e.pending;
+ let done=e.recovery_done_anchor;
+ let resume_done=e.resume_done_date;
+ let chain_remaining=e.chain_remaining;
+ let chain_reset=e.chain_reset;
+ drop(e);
+ let db=s.db.lock().unwrap();
+ let _=if let Some(r)=recovery{storage::save_cached(&db,"missed_anchor_recovery_v1",&r)}
+ else{storage::set_meta(&db,"missed_anchor_recovery_v1",None)};
+ let _=storage::set_meta(&db,"missed_anchor_recovery_done",Some(&done.to_string()));
+ let _=storage::set_meta(&db,"day_resume_done_v1",resume_done.as_ref().map(|x|x.to_string()).as_deref());
+ let _=storage::set_meta(&db,"chain_remaining_v1",Some(&chain_remaining.to_string()));
+ let _=storage::set_meta(&db,"chain_reset_v1",chain_reset.as_ref().map(|x|x.to_string()).as_deref());
+ let _=if let Some(p)=pending{storage::save_cached(&db,"five_pending_verification_v1",&p)}
+ else{storage::set_meta(&db,"five_pending_verification_v1",None)};
 }
 // A zero-used primary window can contain a sliding now+5h placeholder.
 // Only real usage, a previously successful local trigger, or a stable
@@ -428,8 +454,16 @@ async fn consume(s:&State,allow_partial:bool,selected:Option<String>)->Result<()
  }
  #[cfg(target_os="android")]
  android_bridge::sync_settings(&serde_json::to_string(&settings).map_err(|e|e.to_string())?)?;
- let changed_mode=s.settings.lock().unwrap().mode!=settings.mode;
+ let old=s.settings.lock().unwrap().clone();
+ let changed_mode=old.mode!=settings.mode;
+ let changed_recovery=changed_mode||old.missed_anchor_policy!=settings.missed_anchor_policy
+  ||serde_json::to_string(&old.rules).ok()!=serde_json::to_string(&settings.rules).ok()
+  ||serde_json::to_string(&old.overrides).ok()!=serde_json::to_string(&settings.overrides).ok();
  *s.settings.lock().unwrap()=settings;
+ if changed_recovery{
+  let mut e=s.engine.lock().unwrap();e.recovery=None;e.recovery_done_anchor=0;e.pending=None;e.resume_done_date=None;e.resume_retry_at=None;
+   e.chain_remaining=0;e.chain_reset=None;
+ }
  if changed_mode{
   let mut e=s.engine.lock().unwrap();e.chain_remaining=0;e.chain_reset=None;
   record(&s,"mode","排程模式已變更");
@@ -461,7 +495,13 @@ async fn consume(s:&State,allow_partial:bool,selected:Option<String>)->Result<()
   #[cfg(target_os="android")]
   android_bridge::sync_settings(&serde_json::to_string(&copy).map_err(|e|e.to_string())?)?;
  }
- {let mut e=s.engine.lock().unwrap();e.chain_remaining=0;e.chain_reset=None;e.next=None;}
+ {let mut e=s.engine.lock().unwrap();e.chain_remaining=0;e.chain_reset=None;e.next=None;e.recovery=None;e.recovery_done_anchor=0;e.pending=None;e.resume_done_date=None;e.resume_retry_at=None;}
+ storage::set_meta(&s.db.lock().unwrap(),"missed_anchor_recovery_v1",None)?;
+ storage::set_meta(&s.db.lock().unwrap(),"missed_anchor_recovery_done",None)?;
+ storage::set_meta(&s.db.lock().unwrap(),"day_resume_done_v1",None)?;
+ storage::set_meta(&s.db.lock().unwrap(),"chain_remaining_v1",None)?;
+ storage::set_meta(&s.db.lock().unwrap(),"chain_reset_v1",None)?;
+ storage::set_meta(&s.db.lock().unwrap(),"five_pending_verification_v1",None)?;
  record(&s,"login","已登出；排程已關閉");
  Ok(snapshot(&s))
 }
@@ -538,6 +578,18 @@ async fn consume(s:&State,allow_partial:bool,selected:Option<String>)->Result<()
 }
 fn defer_scheduled_retry(s:&State,planned:&engine::Next,seconds:i64){
  let mut e=s.engine.lock().unwrap();
+ if planned.kind==engine::Kind::Resume{
+  e.resume_retry_at=Some(now()+seconds);
+  drop(e);replan(s);return;
+ }
+ if planned.kind==engine::Kind::Recovery{
+  if let Some(ref mut r)=e.recovery{r.at=now()+seconds;}
+  drop(e);replan(s);return;
+ }
+ if planned.kind==engine::Kind::Verify{
+  if let Some(ref mut p)=e.pending{p.at=now()+seconds;}
+  drop(e);replan(s);return;
+ }
  e.next=Some(engine::Next{
   at:now()+seconds,kind:planned.kind,auto_count:planned.auto_count,
   reason:format!("失敗後 {} 分鐘再檢查",seconds/60),
@@ -554,11 +606,63 @@ async fn run_planned(s:&State,planned:engine::Next){
  let quota=match refresh_internal(s,false).await{
   Ok(v)=>v,Err(e)=>{record(s,"error",&format!("排程查詢失敗: {e}"));defer_scheduled_retry(s,&planned,900);return}
  };
+ if planned.kind==engine::Kind::Recovery&&engine::confirmed(&quota,now()){
+  if let Some(reset)=engine::reset_timestamp(quota.five_reset.as_ref()){
+   if reset>now(){
+    {let mut e=s.engine.lock().unwrap();if let Some(ref mut r)=e.recovery{r.at=reset+15;}}
+    record(s,"scheduler","補接續時現有 5h 仍有效，延至實際重置後");
+    replan(s);return;
+   }
+  }
+ }
+ if planned.kind==engine::Kind::Verify{
+  let actual_reset=engine::reset_timestamp(quota.five_reset.as_ref());
+  // Do not hold a std::sync::MutexGuard across the async notification.
+  let verification={
+   let mut e=s.engine.lock().unwrap();
+   if let Some(pending)=e.pending.take(){
+    let fixed=engine::confirmed(&quota,now())
+     && actual_reset.is_some_and(|r|(r-pending.expected_reset).abs()<=20);
+    if fixed{
+     if pending.auto_count>0{
+      e.chain_remaining=pending.auto_count;
+      e.chain_reset=actual_reset;
+     }
+     if pending.from_recovery{
+      if let Some(r)=e.recovery.take(){e.recovery_done_anchor=r.anchor_at;}
+     }
+     if let Some(date)=pending.resume_date{e.resume_done_date=Some(date);e.resume_retry_at=None;}
+    }else{
+     if pending.from_recovery{if let Some(ref mut r)=e.recovery{r.at=now()+900;}}
+     if pending.resume_date.is_some(){e.resume_retry_at=Some(now()+900);}
+    }
+    Some(fixed)
+   }else{None}
+  };
+  match verification{
+   Some(true)=>{
+    record(s,"scheduler","已確認先前請求啟動 5h，後續接續排程恢復");
+    notify(s,"Codex 5h 啟動已確認","後續自動接續排程已恢復").await;
+   },
+   Some(false)=>record(s,"scheduler","無法確認上一筆請求建立新 5h，保留下一次排程"),
+   None=>{},
+  }
+  replan(s);return;
+ }
  if mode==schedule::Mode::Custom&&engine::confirmed(&quota,now()){
-  let remaining=engine::reset_timestamp(quota.five_reset.as_ref()).unwrap_or(now())-now();
+  let actual_reset=engine::reset_timestamp(quota.five_reset.as_ref()).unwrap_or(now());
+  let remaining=actual_reset-now();
+  if remaining>60&&planned.kind==engine::Kind::Chain{
+   s.engine.lock().unwrap().chain_reset=Some(actual_reset);
+   record(s,"scheduler","目前 5h 視窗延後重置，接續改以官方最新時間為準");
+   replan(s);return;
+  }
   if remaining>=0&&remaining<=60{
    s.engine.lock().unwrap().next=Some(engine::Next{
-    at:now()+remaining+15,kind:engine::Kind::AnchorRetry,auto_count:planned.auto_count,
+    at:now()+remaining+15,
+     kind:if matches!(planned.kind,engine::Kind::Anchor|engine::Kind::AnchorRetry)
+      {engine::Kind::AnchorRetry}else{planned.kind},
+     auto_count:planned.auto_count,
     reason:"等候 5 小時重置".into()});
    return;
   }
@@ -572,17 +676,54 @@ async fn run_planned(s:&State,planned:engine::Next){
   else{planned.auto_count}
  }else{0};
  match trigger(s,followups,"排程").await{
-  Ok(TriggerOutcome::Started)=>{},
+  Ok(TriggerOutcome::Started)=>{
+   if planned.kind==engine::Kind::Resume{
+    let mut e=s.engine.lock().unwrap();
+    e.resume_done_date=chrono::DateTime::<chrono::Utc>::from_timestamp(planned.at,0)
+      .map(|v|v.with_timezone(&chrono::Local).date_naive());
+    e.resume_retry_at=None;
+   }
+   if planned.kind==engine::Kind::Recovery{
+    let mut e=s.engine.lock().unwrap();
+    if let Some(r)=e.recovery.take(){e.recovery_done_anchor=r.anchor_at;}
+    drop(e);
+    record(s,"scheduler","錨點失敗後已成功補接續");
+   }
+  },
   Ok(TriggerOutcome::Unchanged)=>{
-   // If the existing window is still not locally confirmed, do not
-   // issue another minimal request every 15 seconds.
+   if planned.kind==engine::Kind::Recovery{
+    let latest_reset={s.usage.lock().unwrap().as_ref().and_then(|u|engine::reset_timestamp(u.five_reset.as_ref()))};
+    let mut e=s.engine.lock().unwrap();
+    if let Some(ref mut r)=e.recovery{
+     r.at=latest_reset.filter(|t|*t>now()).map(|v|v+15).unwrap_or(now()+900);
+    }
+    drop(e);replan(s);return;
+   }
    replan(s);
    let confirmed={s.usage.lock().unwrap().as_ref().is_some_and(|u|engine::confirmed(u,now()))};
    if !confirmed{defer_scheduled_retry(s,&planned,900);}
    return;
   },
   Ok(TriggerOutcome::Pending)=>{
-   defer_scheduled_retry(s,&planned,300);
+   let latest_reset={s.usage.lock().unwrap().as_ref()
+    .and_then(|u|engine::reset_timestamp(u.five_reset.as_ref()))};
+   let plausible=latest_reset.is_some_and(|r|(r-(now()+5*3600)).abs()<=180);
+   if plausible{
+    let mut e=s.engine.lock().unwrap();
+    e.pending=Some(engine::PendingVerification{
+     at:now()+150,expected_reset:latest_reset.unwrap(),auto_count:followups,
+     from_recovery:planned.kind==engine::Kind::Recovery,
+     resume_date:if planned.kind==engine::Kind::Resume{
+      chrono::DateTime::<chrono::Utc>::from_timestamp(planned.at,0)
+       .map(|v|v.with_timezone(&chrono::Local).date_naive())
+     }else{None},
+    });
+    drop(e);
+    record(s,"scheduler","Codex 請求完成，2 分鐘後核對 5h 視窗後才接續");
+    replan(s);
+   }else{
+    defer_scheduled_retry(s,&planned,900);
+   }
    return;
   },
   Err(e)=>{
@@ -641,13 +782,23 @@ pub fn run(){
   let cached_credits=storage::get_cached::<api::Credits>(&db,"last_credits");
   let cached_global=storage::get_cached::<api::Global>(&db,"last_global");
   let armed=storage::get_meta(&db,"banked_armed");
+  let recovery=storage::get_cached::<engine::Recovery>(&db,"missed_anchor_recovery_v1");
+  let pending=storage::get_cached::<engine::PendingVerification>(&db,"five_pending_verification_v1");
+  let chain_remaining=storage::get_meta(&db,"chain_remaining_v1")
+    .and_then(|v|v.parse::<u8>().ok()).unwrap_or(0).min(6);
+   let chain_reset=storage::get_meta(&db,"chain_reset_v1")
+    .and_then(|v|v.parse::<i64>().ok());
+   let resume_done=storage::get_meta(&db,"day_resume_done_v1")
+    .and_then(|v|chrono::NaiveDate::parse_from_str(&v,"%Y-%m-%d").ok());
+   let recovery_done=storage::get_meta(&db,"missed_anchor_recovery_done")
+   .and_then(|v|v.parse::<i64>().ok()).unwrap_or(0);
   #[cfg(target_os="android")]
   let armed=if android_bridge::banked_armed().unwrap_or(false){Some("android-native".into())}else{armed};
   let state=Arc::new(State{
    app:handle.clone(),db:Mutex::new(db),settings:Mutex::new(settings),usage:Mutex::new(cached_usage),
    credits:Mutex::new(cached_credits),global:Mutex::new(cached_global),last_credits:Mutex::new(0),last_global:Mutex::new(0),
    ntfy_status:Mutex::new("尚未測試".into()),armed:Mutex::new(armed),
-   engine:Mutex::new(engine::Engine::default()),error:Mutex::new({
+   engine:Mutex::new(engine::Engine{recovery,recovery_done_anchor:recovery_done,pending,resume_done_date:resume_done,chain_remaining,chain_reset,..Default::default()}),error:Mutex::new({
     #[cfg(target_os="android")] {migration_error}
     #[cfg(not(target_os="android"))] {None}
    }),
