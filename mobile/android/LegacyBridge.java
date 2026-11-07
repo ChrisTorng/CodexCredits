@@ -225,7 +225,7 @@ public final class LegacyBridge {
             if(!e.commit())throw new IllegalStateException("SharedPreferences commit failed");
             if(!oldPolicy.equals(policy)||!oldWeekly.equals(newWeekly)
                     ||!oldOverrides.equals(converted.toString()))
-                Scheduler.clearRecovery(c);
+                {Scheduler.clearRecovery(c);Scheduler.clearDailyResume(c);}
             Scheduler.setMode(c,legacyMode);
             Scheduler.scheduleQuotaSampling(c);
             return "ok";
