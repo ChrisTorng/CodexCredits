@@ -16,8 +16,8 @@ import "./style.css";
 
 type Mode="off"|"auto"|"custom";
 type MissedPolicy="at_reset"|"next_slot"|"skip_today";
-type Rule={id:string;enabled:boolean;days:boolean[];hour:number;minute:number;auto_count:number};
-type Override={enabled:boolean;rules:Rule[]};
+type Rule={id:string;enabled:boolean;days:boolean[];hour:number;minute:number;auto_count:number;start_kind?:"anchor"|"resume"};
+type Override={enabled:boolean;rules:Rule[];resume_auto_count?:number|null};
 type Settings={mode:Mode;missed_anchor_policy:MissedPolicy;sampling_minutes:number;retention_days:number;rules:Rule[];overrides:Record<string,Override>;ntfy_topic:string;theme:string;native_notify_enabled:boolean};
 type Usage={five_hour:number|null;weekly:number|null;five_reset:string|null;weekly_reset:string|null;primary_confirmed:boolean;plan:string;allowed:boolean;limit_reached:boolean;checked_at:string};
 type Credit={id:string;title:string;description:string;expires_at:string};
@@ -72,7 +72,7 @@ app.innerHTML=[
 '<dialog id="reset-dialog" class="modal"><h2 id="reset-dialog-title">Banked Reset</h2><p id="reset-dialog-desc"></p><div class="dialog-buttons">',
 '<button id="reset-arm">用盡後自動使用一次</button><button id="reset-exhausted">已用盡，立即重置</button><button id="reset-now">立即使用（含部分用量）</button><button id="reset-cancel">取消</button></div></dialog>',
 '<dialog id="rule-dialog" class="modal"><h2 id="rule-title">編輯排程</h2><p class="note">每個錨點可設定「後續自動」次數；每次依實際 5h reset 決定接續時間。</p><label class="override-row" id="override-wrap" hidden><input type="checkbox" id="override-checkbox">覆寫每週預設</label>',
-'<p class="note" id="override-hint" hidden>關閉覆寫＝照每週預設；開啟但不加任何時段＝當天完全不觸發。</p><div id="rule-list"></div>',
+'<p class="note" id="override-hint" hidden>關閉覆寫＝照每週預設；開啟後可選接續或自訂錨點。</p><div id="day-resume-row" class="day-resume-row" hidden><label><input type="checkbox" id="day-resume"> 首項依 5h 實際重置時間接續</label><label>後續自動 <select id="day-resume-count"></select></label><p id="day-resume-hint" class="note"></p></div><div id="rule-list"></div>',
 '<button class="action" id="rule-add">＋ 新增錨點</button><button class="action" id="rule-recommended">套用建議：06:00 ＋ 接續 3 次</button>',
 '<div class="dialog-footer"><button id="rule-cancel">取消</button><button class="primary" id="rule-save">儲存</button></div></dialog>'
 ].join("");
@@ -122,6 +122,7 @@ let refreshing=false;
 let editing:"weekly"|"today"|"tomorrow"="weekly";
 let draft:Rule[]=[];
 let overrideOn=false;
+let resumeAutoCount:number|null=null;
 const charts:Record<string,echarts.ECharts>={};
 const chartIds=["primary-chart","weekly-chart","yesterday-chart","today-chart"] as const;
 const getChart=(id:string)=>charts[id]??(charts[id]=echarts.init($(id),undefined,{renderer:"canvas"}));
@@ -135,6 +136,7 @@ const today=(offset=0)=>{const d=new Date();d.setDate(d.getDate()+offset);return
 const hhmm=(r:Rule)=>String(r.hour).padStart(2,"0")+":"+String(r.minute).padStart(2,"0");
 const ruleLabel=(r:Rule,weekly:boolean)=>{
  const days=["一","二","三","四","五","六","日"].filter((_,i)=>r.days[i]).join(" ");
+ if(r.start_kind==="resume")return (weekly?(days||"未選")+"\n":"")+"持續接續（依實際 5h 重置）";
  const base=hhmm(r);
  let continuation="";
  for(let i=1;i<=r.auto_count;i++){
@@ -627,12 +629,38 @@ $("ntfy-copy").onclick=async()=>{
  catch(e){toast("複製失敗："+String(e));}
 };
 function cloned(r:Rule):Rule{return {...r,days:[...r.days]};}
+function minAllowedTime(date:string){
+ const begin=new Date(date+"T00:00:00").getTime();
+ const end=new Date(date+"T00:00:00");end.setDate(end.getDate()+1);
+ const q=snapshot?.usage;
+ const reset=q?.primary_confirmed&&q.five_reset?Date.parse(q.five_reset):0;
+ const earliest=Math.max(begin,Date.now()+1000,Number.isFinite(reset)?reset+15000:0);
+ if(earliest>=end.getTime())return "23:59";
+ return new Date(Math.ceil(earliest/60000)*60000).toTimeString().slice(0,5);
+}
+function configureDayResume(){
+ const weekly=editing==="weekly",date=today(editing==="today"?0:1);
+ const block=$("day-resume-row");block.hidden=weekly||!overrideOn;
+ const check=$("day-resume") as HTMLInputElement;check.checked=resumeAutoCount!==null;
+ const count=$("day-resume-count") as HTMLSelectElement;count.replaceChildren();
+ const min=minAllowedTime(date);
+ const proposed=new Date(date+"T"+(min||"00:00")+":00").getTime();
+ const nextDay=new Date(date+"T00:00:00");nextDay.setDate(nextDay.getDate()+1);
+ const max=Math.max(0,Math.min(6,Math.floor((nextDay.getTime()-proposed-1)/FIVE_HOUR_MS)));
+ for(let i=0;i<=max;i++){const opt=new Option(i+" 次",String(i));count.add(opt);}
+ if(resumeAutoCount!==null){resumeAutoCount=Math.min(resumeAutoCount,max);count.value=String(resumeAutoCount);}
+ count.disabled=resumeAutoCount===null;
+ const q=snapshot?.usage;
+ $("day-resume-hint").textContent=(q?.primary_confirmed&&q.five_reset?"目前 5h 視窗："+fdate(q.five_reset)+" 才結束。":"目前沒有已確認的 5h 視窗：依當日可用時間啟動。")+
+   " 當日預估最多可再接續 "+max+" 次；執行時重新依最新配額調整。";
+}
 function editDate(key:"weekly"|"today"|"tomorrow"){
  if(!snapshot)return;
  editing=key;
  const date=key==="today"?today(0):key==="tomorrow"?today(1):null;
  const ov=date?snapshot.settings.overrides[date]:null;
  draft=(date?(ov?.rules??[]):snapshot.settings.rules).map(cloned);
+ resumeAutoCount=date?(ov?.resume_auto_count??null):null;
  overrideOn=date?(ov?.enabled??false):false;
  $("rule-title").textContent=key==="weekly"?"每週預設":(key==="today"?"今天":"明天")+" · "+date;
  $("override-wrap").hidden=!date;$("override-hint").hidden=!date;
@@ -646,6 +674,12 @@ $("today-edit").onclick=()=>editDate("today");
 $("tomorrow-edit").onclick=()=>editDate("tomorrow");
 $("rule-cancel").onclick=()=>($("rule-dialog") as HTMLDialogElement).close();
 $("override-checkbox").onchange=()=>{overrideOn=($("override-checkbox") as HTMLInputElement).checked;drawRuleEditor();};
+$("day-resume").onchange=()=>{
+ resumeAutoCount=($("day-resume") as HTMLInputElement).checked?0:null;
+ if(resumeAutoCount!==null)draft=[];
+ drawRuleEditor();
+};
+$("day-resume-count").onchange=()=>{resumeAutoCount=Number(($("day-resume-count") as HTMLSelectElement).value);drawRuleEditor();};
 function maxSafe(rule:Rule,rules:Rule[],weekly:boolean){
  if(!rule.enabled)return 0;
  const period=weekly?10080:1440;
