@@ -555,13 +555,21 @@ final class Scheduler {
                 return;
             }
 
+            long requestedAt=System.currentTimeMillis();
             cli.triggerMinimal();
             Thread.sleep(2_000L);
             CodexClient.Quota after=cli.getQuota();
-            storeQuota(c,after,true);
-            record(c,"已自動建立新的 5 小時視窗");
-            notifyNtfy(c,"Codex 5 小時配額已啟動",quotaNotification(after));
-            scheduleAutoFromQuota(c,after);
+            if(newWindowConfirmed(q,after,requestedAt)){
+                storeQuota(c,after,true);
+                record(c,"已確認自動建立新的 5 小時視窗");
+                notifyNtfy(c,"Codex 5 小時配額已啟動",quotaNotification(after));
+                scheduleAutoFromQuota(c,after);
+            }else{
+                storeQuota(c,after,false);
+                record(c,"自動接續請求完成，但新視窗尚待官方確認");
+                scheduleEvent(c,System.currentTimeMillis()+150_000L,
+                        "稍後確認 5 小時視窗",EVENT_AUTO,0);
+            }
         }catch(Exception e){
             record(c,"自動排程失敗: "+safe(e));
             notifyNtfy(c,"Codex 排程錯誤",safe(e));
