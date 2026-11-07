@@ -23,7 +23,7 @@ names=["AlarmReceiver","AndroidNotifications","BackupJobService","BootReceiver",
 for name in names:
     # Stage maintained Scheduler with missed-anchor recovery; keep original repo read-only.
     # UsageHistory retains corrected operator-observed Global Reset identification.
-    source=(Path("mobile/android")/(name+".java")) if name in ("UsageHistory","Scheduler","CodexClient") else (old/(name+".java"))
+    source=(Path("mobile/android")/(name+".java")) if name in ("UsageHistory","Scheduler","CodexClient","ScheduleConfig") else (old/(name+".java"))
     # Rename user-visible strings only in staged copies; legacy source is read-only.
     text=source.read_text(encoding="utf-8")
     text=text.replace("Codex Tools","Codex Credits").replace(
