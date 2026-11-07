@@ -815,7 +815,7 @@ final class Scheduler {
         if(!q.primaryConfirmed||q.primaryResetMs<=now)return;
         LocalDate date=Instant.ofEpochMilli(now).atZone(ZoneId.systemDefault()).toLocalDate();
         for(ScheduleConfig.Rule rule:ScheduleConfig.rulesForDate(c,date)){
-            if(!rule.enabled)continue;
+            if(!rule.enabled||rule.resume)continue;
             long anchor=date.atTime(rule.hour,rule.minute)
                     .atZone(ZoneId.systemDefault()).toInstant().toEpochMilli();
             if(now>=anchor && now<anchor+FIVE_HOURS_MS
