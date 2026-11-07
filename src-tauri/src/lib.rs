@@ -650,7 +650,13 @@ async fn run_planned(s:&State,planned:engine::Next){
   replan(s);return;
  }
  if mode==schedule::Mode::Custom&&engine::confirmed(&quota,now()){
-  let remaining=engine::reset_timestamp(quota.five_reset.as_ref()).unwrap_or(now())-now();
+  let actual_reset=engine::reset_timestamp(quota.five_reset.as_ref()).unwrap_or(now());
+  let remaining=actual_reset-now();
+  if remaining>60&&planned.kind==engine::Kind::Chain{
+   s.engine.lock().unwrap().chain_reset=Some(actual_reset);
+   record(s,"scheduler","目前 5h 視窗延後重置，接續改以官方最新時間為準");
+   replan(s);return;
+  }
   if remaining>=0&&remaining<=60{
    s.engine.lock().unwrap().next=Some(engine::Next{
     at:now()+remaining+15,
