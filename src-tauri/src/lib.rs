@@ -895,7 +895,11 @@ pub fn run(){
     });
    }
   }
-  TrayIconBuilder::with_id("quota").icon(tray_status::icon(None,now())).tooltip("Codex Credits · 正在取得用量").show_menu_on_left_click(false).menu(&menu)
+  // Use persisted usage for the initial tray too; live polling comes afterward.
+  let initial_tray_usage=state.usage.lock().unwrap().clone();
+  TrayIconBuilder::with_id("quota")
+   .icon(tray_status::icon(initial_tray_usage.as_ref(),now()))
+   .tooltip(tray_status::tooltip(initial_tray_usage.as_ref(),now())).show_menu_on_left_click(false).menu(&menu)
    .on_tray_icon_event(|tray,event|{
      if let TrayIconEvent::DoubleClick{button:MouseButton::Left,..}=event{
        if let Some(window)=tray.app_handle().get_webview_window("main"){
