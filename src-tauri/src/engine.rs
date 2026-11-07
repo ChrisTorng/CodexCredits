@@ -141,7 +141,7 @@ pub fn missed_today(settings:&Settings,usage:&Usage,now:i64)->Option<Recovery>{
  let local=DateTime::<Utc>::from_timestamp(now,0)?.with_timezone(&Local);
  let date=local.date_naive();
  let mut best:Option<Recovery>=None;
- for rule in settings.rules_for_date(date).into_iter().filter(|r|r.valid()){
+ for rule in settings.rules_for_date(date).into_iter().filter(|r|r.valid()&&r.start_kind==crate::schedule::StartKind::Anchor){
   let anchor=date.and_hms_opt(rule.hour,rule.minute,0)?.and_local_timezone(Local).earliest()?.timestamp();
   if now<anchor||now>=anchor+5*3600||start>=anchor-2{continue;}
   let (at,count)=match settings.missed_anchor_policy{
