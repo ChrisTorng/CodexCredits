@@ -30,6 +30,7 @@ final class ScheduleConfig {
         int hour=6;
         int minute=0;
         int autoCount=0;
+        boolean resume=false;
 
         Rule copy(){
             Rule r=new Rule();
@@ -39,6 +40,7 @@ final class ScheduleConfig {
             r.hour=hour;
             r.minute=minute;
             r.autoCount=autoCount;
+            r.resume=resume;
             return r;
         }
 
@@ -51,6 +53,7 @@ final class ScheduleConfig {
         final LocalDate date;
         boolean enabled=false; // false = use weekly default
         final List<Rule> rules=new ArrayList<>();
+        Integer resumeAutoCount=null;
         DayOverride(LocalDate d){date=d;}
     }
 
@@ -103,6 +106,8 @@ final class ScheduleConfig {
             out.enabled=o.optBoolean("enabled",false);
             JSONArray a=o.optJSONArray("rules");
             if(a!=null)out.rules.addAll(parseRules(a.toString(),false));
+            if(o.has("resumeAutoCount")&&!o.isNull("resumeAutoCount"))
+                out.resumeAutoCount=Math.max(0,Math.min(6,o.optInt("resumeAutoCount",0)));
         }catch(Exception ignored){}
         return out;
     }
@@ -113,6 +118,7 @@ final class ScheduleConfig {
             JSONObject o=new JSONObject();
             o.put("enabled",override.enabled);
             o.put("rules",serializeRules(override.rules,false));
+            if(override.resumeAutoCount!=null)o.put("resumeAutoCount",override.resumeAutoCount);
             all.put(override.date.toString(),o);
 
             // Keep only today/tomorrow/future-nearby entries; old dates are irrelevant.
@@ -147,7 +153,7 @@ final class ScheduleConfig {
             List<Rule> sorted=new ArrayList<>(rules);
             sorted.sort(Comparator.comparingInt((Rule r)->r.hour).thenComparingInt(r->r.minute));
             for(Rule r:sorted){
-                if(!r.enabled)continue;
+                if(!r.enabled||r.resume)continue;
                 ZonedDateTime z=date.atTime(LocalTime.of(r.hour,r.minute)).atZone(zone);
                 long when=z.toInstant().toEpochMilli();
                 if(when>afterMs){
@@ -171,14 +177,36 @@ final class ScheduleConfig {
         return out;
     }
 
+    // -1: no continuation rule; 0..6: explicit day override;
+    // 6: unbounded through-day weekly reset-first schedule.
+    static int resumeForDate(Context c,LocalDate date){
+        DayOverride override=loadOverride(c,date);
+        if(override.enabled){
+            if(override.resumeAutoCount!=null)return override.resumeAutoCount;
+            for(Rule r:override.rules)if(r.enabled&&r.resume)return 6;
+            return -1;
+        }
+        int day=date.getDayOfWeek().getValue()-1;
+        for(Rule r:loadWeekly(c))if(r.enabled&&r.days[day]&&r.resume)return 6;
+        return -1;
+    }
+    static boolean continuousForDate(Context c,LocalDate date){
+        DayOverride override=loadOverride(c,date);
+        if(override.enabled)return override.resumeAutoCount==null
+           &&override.rules.stream().anyMatch(r->r.enabled&&r.resume);
+        int day=date.getDayOfWeek().getValue()-1;
+        for(Rule r:loadWeekly(c))if(r.enabled&&r.days[day]&&r.resume)return true;
+        return false;
+    }
     static int maxSafeAutoCount(Rule target,List<Rule> rules,boolean weekly){
         if(target==null||!target.enabled)return 0;
+        if(target.resume)return 6;
         int minGapMinutes=Integer.MAX_VALUE;
 
         if(weekly){
             List<Integer> anchors=new ArrayList<>();
             for(Rule r:rules){
-                if(!r.enabled)continue;
+                if(!r.enabled||r.resume)continue;
                 for(int d=0;d<7;d++){
                     if(r.days[d])anchors.add(d*1440+r.hour*60+r.minute);
                 }
@@ -198,7 +226,7 @@ final class ScheduleConfig {
         }else{
             List<Integer> anchors=new ArrayList<>();
             for(Rule r:rules){
-                if(r.enabled)anchors.add(r.hour*60+r.minute);
+                if(r.enabled&&!r.resume)anchors.add(r.hour*60+r.minute);
             }
             int t=target.hour*60+target.minute;
             int next=Integer.MAX_VALUE;
@@ -259,7 +287,7 @@ final class ScheduleConfig {
 
         if(weekly){
             for(Rule r:rules){
-                if(!r.enabled)continue;
+                if(!r.enabled||r.resume)continue;
                 for(int d=0;d<7;d++){
                     if(!r.days[d])continue;
                     int base=d*1440+r.hour*60+r.minute;
@@ -340,6 +368,7 @@ final class ScheduleConfig {
     }
 
     static String estimateRule(Rule r){
+        if(r.resume)return "持續接續（依 5h 實際重置）";
         StringBuilder b=new StringBuilder(r.timeText());
         LocalTime t=LocalTime.of(r.hour,r.minute);
         for(int i=1;i<=r.autoCount;i++){
@@ -373,7 +402,8 @@ final class ScheduleConfig {
                 r.enabled=o.optBoolean("enabled",true);
                 r.hour=o.optInt("hour",6);
                 r.minute=o.optInt("minute",0);
-                r.autoCount=Math.max(0,Math.min(8,o.optInt("autoCount",0)));
+                r.autoCount=Math.max(0,Math.min(6,o.optInt("autoCount",0)));
+                r.resume="resume".equals(o.optString("startKind","anchor"));
                 String ds=o.optString("days",weekly?"1111111":"1111111");
                 for(int d=0;d<7;d++)r.days[d]=d<ds.length()&&ds.charAt(d)=='1';
                 out.add(r);
@@ -392,6 +422,7 @@ final class ScheduleConfig {
                 o.put("hour",r.hour);
                 o.put("minute",r.minute);
                 o.put("autoCount",r.autoCount);
+                o.put("startKind",r.resume?"resume":"anchor");
                 StringBuilder ds=new StringBuilder();
                 for(boolean d:r.days)ds.append(d?'1':'0');
                 o.put("days",ds.toString());
