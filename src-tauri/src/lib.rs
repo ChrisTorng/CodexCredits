@@ -292,6 +292,8 @@ async fn refresh_internal(s:&State,force_aux:bool)->Result<api::Usage,String>{
   let _=storage::cleanup(&db,s.settings.lock().unwrap().retention_days);
  }
  *s.usage.lock().unwrap()=Some(value.clone());
+ s.signed_in.store(true,Ordering::Relaxed);
+ s.auth_checked.store(true,Ordering::Relaxed);
  *s.error.lock().unwrap()=None;
  replan(s);
  let check_credits={let last=s.last_credits.lock().unwrap();force_aux||now()-*last>=1800};
@@ -894,8 +896,13 @@ pub fn run(){
   #[cfg(not(target_os="android"))]
   tauri::async_runtime::spawn(async move{
    // First obtain a fresh quota after restart; never replay old persisted alarms.
-   if token().is_ok(){
-    if let Err(e)=refresh_internal(&state,true).await{
+   // Check stored credentials away from the WebView event loop.
+    let logged_in=tokio::task::spawn_blocking(||token().is_ok()).await.unwrap_or(false);
+    state.signed_in.store(logged_in,Ordering::Relaxed);
+    state.auth_checked.store(true,Ordering::Relaxed);
+    let _=handle.emit("credits:updated",());
+    if logged_in{
+     if let Err(e)=refresh_internal(&state,true).await{
      *state.error.lock().unwrap()=Some(e);
     }
     // The first refresh must update the UI as well, not only periodic polls.
@@ -912,7 +919,7 @@ pub fn run(){
     let interval=state.settings.lock().unwrap().sampling_minutes.clamp(10,60) as i64*60;
     if now()-last_sample>=interval{
      last_sample=now();
-     if token().is_ok(){
+     if state.signed_in.load(Ordering::Relaxed){
       if let Err(e)=refresh_internal(&state,false).await{*state.error.lock().unwrap()=Some(e);}
       #[cfg(not(target_os="android"))]
       let armed_id={state.armed.lock().unwrap().clone()};
@@ -945,8 +952,13 @@ pub fn run(){
   tauri::async_runtime::spawn(async move {
    // Android's native AlarmManager/JobScheduler already runs in the background.
    // Do not keep a second, two-second polling loop alive in the Tauri process.
-   if token().is_ok() {
-    if let Err(e)=refresh_internal(&state,true).await{
+   // Check stored credentials away from the WebView event loop.
+    let logged_in=tokio::task::spawn_blocking(||token().is_ok()).await.unwrap_or(false);
+    state.signed_in.store(logged_in,Ordering::Relaxed);
+    state.auth_checked.store(true,Ordering::Relaxed);
+    let _=handle.emit("credits:updated",());
+    if logged_in{
+     if let Err(e)=refresh_internal(&state,true).await{
      *state.error.lock().unwrap()=Some(e);
     }
     let _=handle.emit("credits:updated",());
