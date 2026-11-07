@@ -12,12 +12,16 @@ pub enum MissedAnchorPolicy{
  #[default] NextSlot,
  SkipToday,
 }
+#[derive(Debug,Clone,Copy,Serialize,Deserialize,PartialEq,Eq,Default)]
+#[serde(rename_all="snake_case")]
+pub enum StartKind{#[default]Anchor,Resume}
 #[derive(Debug,Clone,Serialize,Deserialize)]
 pub struct Rule {
- pub id:String,pub enabled:bool,pub days:[bool;7],pub hour:u32,pub minute:u32,pub auto_count:u8
+ pub id:String,pub enabled:bool,pub days:[bool;7],pub hour:u32,pub minute:u32,pub auto_count:u8,
+ #[serde(default)]pub start_kind:StartKind
 }
 impl Default for Rule {
- fn default()->Self{Self{id:"daily-0600".into(),enabled:true,days:[true;7],hour:6,minute:0,auto_count:3}}
+ fn default()->Self{Self{id:"daily-0600".into(),enabled:true,days:[true;7],hour:6,minute:0,auto_count:3,start_kind:StartKind::Anchor}}
 }
 impl Rule{pub fn valid(&self)->bool{self.hour<24&&self.minute<60&&self.auto_count<=6}}
 #[derive(Debug,Clone,Serialize,Deserialize,Default)]
@@ -46,12 +50,24 @@ impl Settings{
   && (1..=3650).contains(&self.retention_days)
   && self.rules.len()<=100
   && self.rules.iter().all(Rule::valid)
+  && !has_resume_anchor_overlap(&self.rules,true)
   && conflict_ids(&self.rules,true).is_empty()
   && self.overrides.len()<=32
   && self.overrides.iter().all(|(date,ov)|NaiveDate::parse_from_str(date,"%Y-%m-%d").is_ok()
-      &&ov.resume_auto_count.is_none_or(|n|n<=6) &&ov.rules.len()<=100 &&ov.rules.iter().all(Rule::valid) &&(!ov.enabled||conflict_ids(&ov.rules,false).is_empty()))
+      &&ov.resume_auto_count.is_none_or(|n|n<=6) &&ov.rules.len()<=100 &&ov.rules.iter().all(Rule::valid) &&(!ov.enabled||(!has_resume_anchor_overlap(&ov.rules,false)&&conflict_ids(&ov.rules,false).is_empty())))
   &&["system","light","dark"].contains(&self.theme.as_str())
   && (self.ntfy_topic.is_empty() || ntfy_valid(&self.ntfy_topic))
+ }
+ pub fn resume_for_date(&self,date:NaiveDate)->Option<u8>{
+  if let Some(ov)=self.overrides.get(&date.to_string()){
+   if ov.enabled{
+    if ov.resume_auto_count.is_some(){return ov.resume_auto_count;}
+    return ov.rules.iter().find(|r|r.enabled&&r.start_kind==StartKind::Resume).map(|r|r.auto_count);
+   }
+  }
+  let day=date.weekday().num_days_from_monday() as usize;
+  self.rules.iter().find(|r|r.enabled&&r.days[day]&&r.start_kind==StartKind::Resume)
+   .map(|r|r.auto_count)
  }
  pub fn rules_for_date(&self,date:NaiveDate)->Vec<Rule>{
   if let Some(override_day)=self.overrides.get(&date.to_string()){
@@ -64,7 +80,7 @@ impl Settings{
   for offset in 0..=370{
    let date=after.date_naive()+Duration::days(offset);
    let mut best:Option<(DateTime<Local>,u8)>=None;
-   for r in self.rules_for_date(date).iter().filter(|r|r.valid()){
+   for r in self.rules_for_date(date).iter().filter(|r|r.valid()&&r.start_kind==StartKind::Anchor){
     if let Some(local)=date.and_hms_opt(r.hour,r.minute,0).and_then(|d|d.and_local_timezone(Local).earliest()){
      if local>after && best.as_ref().is_none_or(|(v,_)|local<*v){best=Some((local,r.auto_count));}
     }
@@ -73,6 +89,14 @@ impl Settings{
   }
   None
  }
+}
+fn has_resume_anchor_overlap(rules:&[Rule],weekly:bool)->bool{
+ for d in 0..(if weekly{7}else{1}){
+  let applicable=|r:&&Rule|r.enabled&&(!weekly||r.days[d]);
+  let n=rules.iter().filter(applicable).filter(|r|r.start_kind==StartKind::Resume).count();
+  if n>1 || n==1&&rules.iter().filter(applicable).any(|r|r.start_kind==StartKind::Anchor){return true;}
+ }
+ false
 }
 fn ntfy_valid(s:&str)->bool{
  let Ok(url)=url::Url::parse(s)else{return false};
@@ -86,10 +110,10 @@ pub fn next_anchor(after:DateTime<Local>,rules:&[Rule])->Option<DateTime<Local>>
 }
 pub fn safe_followups(target:&Rule,rules:&[Rule])->u8{max_safe_count(target,rules,true)}
 pub fn max_safe_count(target:&Rule,rules:&[Rule],weekly:bool)->u8{
- if !target.enabled||!target.valid(){return 0}
+ if !target.enabled||!target.valid()||target.start_kind==StartKind::Resume{return 0}
  let period=if weekly{10080}else{1440};
  let mut starts=Vec::new();
- for r in rules.iter().filter(|r|r.enabled&&r.valid()){
+ for r in rules.iter().filter(|r|r.enabled&&r.valid()&&r.start_kind==StartKind::Anchor){
   for d in 0..(if weekly{7}else{1}){
    if weekly&&!r.days[d]{continue;}
    starts.push(d*1440+r.hour as usize*60+r.minute as usize);
@@ -111,7 +135,7 @@ pub fn conflict_ids(rules:&[Rule],weekly:bool)->Vec<String>{
  let period=if weekly{10080usize}else{1440usize};
  let mut bad=Vec::<String>::new();
  let mut occurrences:Vec<(&str,usize)>=Vec::new();
- for r in rules.iter().filter(|r|r.enabled&&r.valid()){
+ for r in rules.iter().filter(|r|r.enabled&&r.valid()&&r.start_kind==StartKind::Anchor){
   if r.auto_count>max_safe_count(r,rules,weekly){bad.push(r.id.clone());}
   for d in 0..(if weekly{7}else{1}){
    if weekly&&!r.days[d]{continue;}
@@ -152,5 +176,11 @@ pub fn conflict_ids(rules:&[Rule],weekly:bool)->Vec<String>{
   s.rules.push(duplicate);
   assert!(!s.valid());
  }
- #[test]fn topic_validation(){let mut s=Settings::default();s.ntfy_topic="https://ntfy.sh/codex-abc".into();assert!(s.valid());s.ntfy_topic="http://localhost/a".into();assert!(!s.valid());}
+ #[test]fn weekly_continuation_only_is_valid_and_anchors_are_excluded(){
+   let mut s=Settings::default();s.rules[0].start_kind=StartKind::Resume;
+   assert!(s.valid());
+   assert_eq!(s.resume_for_date(Local::now().date_naive()),Some(3));
+   assert!(s.next_slot(Local::now()).is_none());
+  }
+  #[test]fn topic_validation(){let mut s=Settings::default();s.ntfy_topic="https://ntfy.sh/codex-abc".into();assert!(s.valid());s.ntfy_topic="http://localhost/a".into();assert!(!s.valid());}
 }
