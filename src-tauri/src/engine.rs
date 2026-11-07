@@ -53,7 +53,7 @@ pub fn blocked(usage:&Usage)->bool{
  !usage.allowed ||usage.weekly.is_some_and(|p|p>=100.)
 }
 pub fn can_trigger(usage:&Usage,now:i64)->Result<(),String>{
- if blocked(usage){return Err("週配額不可用或已達限制".into());}
+ if blocked(usage){return Err("週用量不可用或已達限制".into());}
  if confirmed(usage,now){return Err("5 小時視窗仍有效，請等待重置後再觸發".into());}
  Ok(())
 }
@@ -117,8 +117,8 @@ pub fn next_event(settings:&Settings,usage:Option<&Usage>,engine:&Engine,now:i64
     (reset_timestamp(u.five_reset.as_ref()).unwrap_or(now)+RESET_GRACE_SEC,"5 小時視窗重置後")
    }else if u.weekly.is_some_and(|p|p>=100.){
     let reset=reset_timestamp(u.weekly_reset.as_ref())?;
-    if reset>now {(reset+RESET_GRACE_SEC,"週配額重置後")}
-    else{(now+15*60,"週配額仍未恢復，15 分鐘後再確認")}
+    if reset>now {(reset+RESET_GRACE_SEC,"週用量重置後")}
+    else{(now+15*60,"週用量仍未恢復，15 分鐘後再確認")}
    }else if !u.allowed{
     (now+15*60,"等待伺服器允許觸發")
    }else{(now+15,"尚未確認 5 小時視窗，準備觸發")};
