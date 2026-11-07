@@ -582,59 +582,57 @@ async fn consume(s:&State,allow_partial:bool,selected:Option<String>)->Result<()
   .show().map_err(|e|e.to_string())?;
  Ok("已送出測試通知".into())
 }
-// Windows reads local history in a worker; Android retains native JNI sync.
+// Android's JNI and native scheduler retain the original synchronous
+// commands; only Windows moves SQLite reads off the WebView main thread.
+#[cfg(target_os="android")]
+#[tauri::command]
+fn get_local_state(s:tauri::State<'_,Arc<State>>)->Result<LocalState,String>{
+ let (history,events)={
+  let db=s.db.lock().unwrap();
+  legacy::sync_native(&db)?;
+  (storage::history(&db)?,storage::events(&db)?)
+ };
+ Ok(LocalState{snapshot:snapshot(&s),history,events})
+}
+#[cfg(not(target_os="android"))]
 #[tauri::command]
 async fn get_local_state(s:tauri::State<'_,Arc<State>>)->Result<LocalState,String>{
- #[cfg(target_os="android")]
- {
+ let state=Arc::clone(&*s);
+ tokio::task::spawn_blocking(move||{
   let (history,events)={
-   let db=s.db.lock().unwrap();
-   legacy::sync_native(&db)?;
+   let db=state.db.lock().unwrap();
    (storage::history(&db)?,storage::events(&db)?)
   };
-  return Ok(LocalState{snapshot:snapshot(&s),history,events});
- }
- #[cfg(not(target_os="android"))]
- {
-  let state=Arc::clone(&*s);
-  tokio::task::spawn_blocking(move||{
-   let (history,events)={
-    let db=state.db.lock().unwrap();
-    (storage::history(&db)?,storage::events(&db)?)
-   };
-   Ok(LocalState{snapshot:snapshot(&state),history,events})
-  }).await.map_err(|e|format!("本機用量歷史讀取工作失敗: {e}"))?
- }
+  Ok(LocalState{snapshot:snapshot(&state),history,events})
+ }).await.map_err(|e|format!("本機用量歷史讀取工作失敗: {e}"))?
 }
+#[cfg(target_os="android")]
+#[tauri::command]
+fn get_history(s:tauri::State<'_,Arc<State>>)->Result<Vec<serde_json::Value>,String>{
+ let db=s.db.lock().unwrap();
+ legacy::sync_native(&db)?;
+ storage::history(&db)
+}
+#[cfg(not(target_os="android"))]
 #[tauri::command]
 async fn get_history(s:tauri::State<'_,Arc<State>>)->Result<Vec<serde_json::Value>,String>{
- #[cfg(target_os="android")]
- {
-  let db=s.db.lock().unwrap();
-  legacy::sync_native(&db)?;
-  return storage::history(&db);
- }
- #[cfg(not(target_os="android"))]
- {
-  let state=Arc::clone(&*s);
-  tokio::task::spawn_blocking(move||storage::history(&state.db.lock().unwrap()))
-    .await.map_err(|e|format!("用量歷史讀取工作失敗: {e}"))?
- }
+ let state=Arc::clone(&*s);
+ tokio::task::spawn_blocking(move||storage::history(&state.db.lock().unwrap()))
+  .await.map_err(|e|format!("用量歷史讀取工作失敗: {e}"))?
 }
+#[cfg(target_os="android")]
+#[tauri::command]
+fn get_events(s:tauri::State<'_,Arc<State>>)->Result<Vec<serde_json::Value>,String>{
+ let db=s.db.lock().unwrap();
+ legacy::sync_native(&db)?;
+ storage::events(&db)
+}
+#[cfg(not(target_os="android"))]
 #[tauri::command]
 async fn get_events(s:tauri::State<'_,Arc<State>>)->Result<Vec<serde_json::Value>,String>{
- #[cfg(target_os="android")]
- {
-  let db=s.db.lock().unwrap();
-  legacy::sync_native(&db)?;
-  return storage::events(&db);
- }
- #[cfg(not(target_os="android"))]
- {
-  let state=Arc::clone(&*s);
-  tokio::task::spawn_blocking(move||storage::events(&state.db.lock().unwrap()))
-    .await.map_err(|e|format!("事件讀取工作失敗: {e}"))?
- }
+ let state=Arc::clone(&*s);
+ tokio::task::spawn_blocking(move||storage::events(&state.db.lock().unwrap()))
+  .await.map_err(|e|format!("事件讀取工作失敗: {e}"))?
 }
 
 fn defer_scheduled_retry(s:&State,planned:&engine::Next,seconds:i64){
