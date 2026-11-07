@@ -233,22 +233,24 @@ function paintQuota(id:string,used:number|null|undefined,reset:string|null|undef
  // Unconfirmed reset_at can be a sliding placeholder. A sample alone
  // must not create 04:47–09:47 boundaries on the status card.
  const valid=resetKnown&&(weekly||confirmed);
-  const historyOnly=!valid||source.length===0;
+  const lastRead=snapshot?.usage?.checked_at?Date.parse(snapshot.usage.checked_at):0;
+  const currentReading=valid&&source.length>0&&Number.isFinite(lastRead)&&Date.now()-lastRead<15*60000;
+  const historyOnly=!currentReading;
   const historicAvailable=historyOnly&&historic.length>0;
-  const plotStart=valid?start:historicAvailable?historyUntil-historySpan:undefined;
-  const plotEnd=valid?until:historicAvailable?historyUntil+60000:undefined;
+  const plotStart=currentReading?start:historicAvailable?historyUntil-historySpan:undefined;
+  const plotEnd=currentReading?until:historicAvailable?historyUntil+60000:undefined;
  const color=weekly?"#e89134":"#2f80ed";
  const actual=source.map(x=>[Date.parse(x.at),safeRemaining(weekly?x.weekly:x.five_hour)]);
  // Unconfirmed historical samples never justify an invented ideal 5h slope.
- const ideal=valid&&(weekly||confirmed)?[[start,100],[until,0]]:[];
+ const ideal=currentReading?[[start,100],[until,0]]:[];
  const now=Date.now();
- const inWindow=valid&&now>=start&&now<=until;
+ const inWindow=currentReading&&now>=start&&now<=until;
  const exp=weekly?nearestCredit(snapshot?.credits?.available??[],now):undefined;
  const expTime=exp?Date.parse(exp.expires_at):NaN;
- const creditMarker=valid&&weekly&&expTime>start&&expTime<until?
+ const creditMarker=currentReading&&weekly&&expTime>start&&expTime<until?
   [{xAxis:expTime,lineStyle:{color:"#e05252",width:2,type:"dashed"},
     label:{show:true,formatter:"券到期",position:"insideEndTop",color:"#e05252",fontSize:10}}]:[];
- const ticks=valid?timelineTicks(start,until,weekly):[];
+ const ticks=currentReading?timelineTicks(start,until,weekly):[];
  const tickLabels=quotaInteriorTicks(ticks,start,until,chart.getWidth(),weekly).map(t=>({
   type:"text",silent:true,bottom:0,
   left:Math.max(3,Math.min(chart.getWidth()-38,5+(chart.getWidth()-10)*(t-start)/span-(weekly?14:9))),
@@ -264,7 +266,7 @@ function paintQuota(id:string,used:number|null|undefined,reset:string|null|undef
   backgroundColor:"transparent",animation:false,
   grid:{left:5,right:5,top:6,bottom:20,containLabel:false},
   xAxis:{type:"time",min:plotStart,max:plotEnd,
-   axisLine:{show:false},splitLine:{show:!valid,lineStyle:{color:p.grid}},axisLabel:{show:!valid},axisTick:{show:false}},
+   axisLine:{show:false},splitLine:{show:!currentReading,lineStyle:{color:p.grid}},axisLabel:{show:!currentReading},axisTick:{show:false}},
   yAxis:{type:"value",min:0,max:100,interval:50,axisLabel:{show:false},axisLine:{show:false},axisTick:{show:false},splitLine:{lineStyle:{color:p.grid}}},
   tooltip:{trigger:"axis",confine:true,
     position:(point:number[],_params:unknown,_dom:unknown,_rect:unknown,size:{viewSize:number[];contentSize:number[]})=>
@@ -273,11 +275,11 @@ function paintQuota(id:string,used:number|null|undefined,reset:string|null|undef
   series:[
    {name:"理想剩餘",type:"line",data:ideal,showSymbol:false,silent:true,lineStyle:{color,type:"dashed",width:1.5,opacity:.8},areaStyle:{color,opacity:.08}},
    {name:"實際剩餘",type:"line",data:historyOnly?historic:actual,showSymbol:false,lineStyle:{width:2.4,color},itemStyle:{color},areaStyle:{color,opacity:.18},
-    markLine:valid?{symbol:["none","none"],silent:true,label:{show:false},
+    markLine:currentReading?{symbol:["none","none"],silent:true,label:{show:false},
       lineStyle:{color:p.grid,width:1,type:"solid"},
       data:[{xAxis:start},{xAxis:until},...ticks.map(t=>({xAxis:t})),...creditMarker,...(inWindow?[{xAxis:now,lineStyle:{color:p.text,type:"dashed",width:1}}]:[])]}:undefined}
   ],
-  graphic:valid?[boundary(start,false),...tickLabels,boundary(until,true)]:[{
+  graphic:currentReading?[boundary(start,false),...tickLabels,boundary(until,true)]:[{
    type:"text",left:10,top:historicAvailable?6:"45%",style:{text:historicAvailable?"歷史用量 · 上次記錄 "+fdate(lastSample?.at??""):
     !snapshot?.auth_checked?"正在確認登入狀態":
     !snapshot?.signed_in?"請先登入":
