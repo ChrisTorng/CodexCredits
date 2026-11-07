@@ -66,8 +66,10 @@ impl Settings{
    }
   }
   let day=date.weekday().num_days_from_monday() as usize;
+  // Weekly resume is continuous across days: never stop merely because a
+  // rule's old fixed-anchor auto_count was three.
   self.rules.iter().find(|r|r.enabled&&r.days[day]&&r.start_kind==StartKind::Resume)
-   .map(|r|r.auto_count)
+   .map(|_|6)
  }
  pub fn rules_for_date(&self,date:NaiveDate)->Vec<Rule>{
   if let Some(override_day)=self.overrides.get(&date.to_string()){
