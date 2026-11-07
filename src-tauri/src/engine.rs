@@ -221,7 +221,7 @@ pub fn is_stale(now:i64,at:i64)->bool{now-at>90}
    let next=next_day_resume(&s,Some(&q),&engine,now).unwrap();
    assert_eq!(next.at,reset+15);
    assert_eq!(next.kind,Kind::Resume);
-   assert_eq!(next.auto_count,6); // Day override permits continuations past midnight until a later anchor
+   assert_eq!(next.auto_count,2); // Tomorrow 06:00 anchor must remain protected
    let done=Engine{resume_done_date:Some(date),..Default::default()};
    assert!(next_day_resume(&s,Some(&q),&done,now).is_none());
   }
