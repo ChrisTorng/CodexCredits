@@ -970,6 +970,18 @@ final class Scheduler {
         }
     }
 
+    static long projectedBusyUntilMs(Context c){
+        Snapshot q=snapshot(c);
+        long now=System.currentTimeMillis();
+        long active=q.primaryConfirmed&&q.primaryResetMs>now?q.primaryResetMs:0;
+        int remaining=chainRemaining(c);
+        long base=Math.max(chainResetMs(c),active);
+        if(remaining>0&&base>0)active=Math.max(active,base+remaining*FIVE_HOURS_MS);
+        long pendingVerify=prefs(c).getLong(KEY_CHAIN_VERIFY_RESET,0);
+        if(pendingVerify>now)active=Math.max(active,pendingVerify+Math.max(0,remaining-1)*FIVE_HOURS_MS);
+        return active;
+    }
+
     static final class DayResume {
         final long whenMs;
         final int autoCount;
