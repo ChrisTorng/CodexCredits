@@ -69,6 +69,7 @@ fn native_next()->Option<engine::Next>{
  if at<=0{return None;}
  let kind=match platform["next_event_kind"].as_str().unwrap_or("auto"){
   "recovery"=>engine::Kind::Recovery,
+  "resume"=>engine::Kind::Resume,
   "anchor"=>engine::Kind::Anchor,
   "anchor_retry"=>engine::Kind::AnchorRetry,
   "chain"=>engine::Kind::Chain,
@@ -121,11 +122,13 @@ fn replan(s:&State){
  let recovery=e.recovery;
  let pending=e.pending;
  let done=e.recovery_done_anchor;
+ let resume_done=e.resume_done_date;
  drop(e);
  let db=s.db.lock().unwrap();
  let _=if let Some(r)=recovery{storage::save_cached(&db,"missed_anchor_recovery_v1",&r)}
  else{storage::set_meta(&db,"missed_anchor_recovery_v1",None)};
  let _=storage::set_meta(&db,"missed_anchor_recovery_done",Some(&done.to_string()));
+ let _=storage::set_meta(&db,"day_resume_done_v1",resume_done.as_ref().map(|x|x.to_string()).as_deref());
  let _=if let Some(p)=pending{storage::save_cached(&db,"five_pending_verification_v1",&p)}
  else{storage::set_meta(&db,"five_pending_verification_v1",None)};
 }
@@ -454,7 +457,7 @@ async fn consume(s:&State,allow_partial:bool,selected:Option<String>)->Result<()
   ||serde_json::to_string(&old.overrides).ok()!=serde_json::to_string(&settings.overrides).ok();
  *s.settings.lock().unwrap()=settings;
  if changed_recovery{
-  let mut e=s.engine.lock().unwrap();e.recovery=None;e.recovery_done_anchor=0;e.pending=None;
+  let mut e=s.engine.lock().unwrap();e.recovery=None;e.recovery_done_anchor=0;e.pending=None;e.resume_done_date=None;e.resume_retry_at=None;
  }
  if changed_mode{
   let mut e=s.engine.lock().unwrap();e.chain_remaining=0;e.chain_reset=None;
@@ -487,9 +490,10 @@ async fn consume(s:&State,allow_partial:bool,selected:Option<String>)->Result<()
   #[cfg(target_os="android")]
   android_bridge::sync_settings(&serde_json::to_string(&copy).map_err(|e|e.to_string())?)?;
  }
- {let mut e=s.engine.lock().unwrap();e.chain_remaining=0;e.chain_reset=None;e.next=None;e.recovery=None;e.recovery_done_anchor=0;e.pending=None;}
+ {let mut e=s.engine.lock().unwrap();e.chain_remaining=0;e.chain_reset=None;e.next=None;e.recovery=None;e.recovery_done_anchor=0;e.pending=None;e.resume_done_date=None;e.resume_retry_at=None;}
  storage::set_meta(&s.db.lock().unwrap(),"missed_anchor_recovery_v1",None)?;
  storage::set_meta(&s.db.lock().unwrap(),"missed_anchor_recovery_done",None)?;
+ storage::set_meta(&s.db.lock().unwrap(),"day_resume_done_v1",None)?;
  storage::set_meta(&s.db.lock().unwrap(),"five_pending_verification_v1",None)?;
  record(&s,"login","已登出；排程已關閉");
  Ok(snapshot(&s))
@@ -567,6 +571,10 @@ async fn consume(s:&State,allow_partial:bool,selected:Option<String>)->Result<()
 }
 fn defer_scheduled_retry(s:&State,planned:&engine::Next,seconds:i64){
  let mut e=s.engine.lock().unwrap();
+ if planned.kind==engine::Kind::Resume{
+  e.resume_retry_at=Some(now()+seconds);
+  drop(e);replan(s);return;
+ }
  if planned.kind==engine::Kind::Recovery{
   if let Some(ref mut r)=e.recovery{r.at=now()+seconds;}
   drop(e);replan(s);return;
@@ -616,8 +624,10 @@ async fn run_planned(s:&State,planned:engine::Next){
      if pending.from_recovery{
       if let Some(r)=e.recovery.take(){e.recovery_done_anchor=r.anchor_at;}
      }
-    }else if pending.from_recovery{
-     if let Some(ref mut r)=e.recovery{r.at=now()+900;}
+     if let Some(date)=pending.resume_date{e.resume_done_date=Some(date);e.resume_retry_at=None;}
+    }else{
+     if pending.from_recovery{if let Some(ref mut r)=e.recovery{r.at=now()+900;}}
+     if pending.resume_date.is_some(){e.resume_retry_at=Some(now()+900);}
     }
     Some(fixed)
    }else{None}
@@ -651,6 +661,12 @@ async fn run_planned(s:&State,planned:engine::Next){
  }else{0};
  match trigger(s,followups,"排程").await{
   Ok(TriggerOutcome::Started)=>{
+   if planned.kind==engine::Kind::Resume{
+    let mut e=s.engine.lock().unwrap();
+    e.resume_done_date=chrono::DateTime::<chrono::Utc>::from_timestamp(planned.at,0)
+      .map(|v|v.with_timezone(&chrono::Local).date_naive());
+    e.resume_retry_at=None;
+   }
    if planned.kind==engine::Kind::Recovery{
     let mut e=s.engine.lock().unwrap();
     if let Some(r)=e.recovery.take(){e.recovery_done_anchor=r.anchor_at;}
@@ -681,6 +697,10 @@ async fn run_planned(s:&State,planned:engine::Next){
     e.pending=Some(engine::PendingVerification{
      at:now()+150,expected_reset:latest_reset.unwrap(),auto_count:followups,
      from_recovery:planned.kind==engine::Kind::Recovery,
+     resume_date:if planned.kind==engine::Kind::Resume{
+      chrono::DateTime::<chrono::Utc>::from_timestamp(planned.at,0)
+       .map(|v|v.with_timezone(&chrono::Local).date_naive())
+     }else{None},
     });
     drop(e);
     record(s,"scheduler","Codex 請求完成，2 分鐘後核對 5h 視窗後才接續");
@@ -748,7 +768,9 @@ pub fn run(){
   let armed=storage::get_meta(&db,"banked_armed");
   let recovery=storage::get_cached::<engine::Recovery>(&db,"missed_anchor_recovery_v1");
   let pending=storage::get_cached::<engine::PendingVerification>(&db,"five_pending_verification_v1");
-  let recovery_done=storage::get_meta(&db,"missed_anchor_recovery_done")
+  let resume_done=storage::get_meta(&db,"day_resume_done_v1")
+    .and_then(|v|chrono::NaiveDate::parse_from_str(&v,"%Y-%m-%d").ok());
+   let recovery_done=storage::get_meta(&db,"missed_anchor_recovery_done")
    .and_then(|v|v.parse::<i64>().ok()).unwrap_or(0);
   #[cfg(target_os="android")]
   let armed=if android_bridge::banked_armed().unwrap_or(false){Some("android-native".into())}else{armed};
@@ -756,7 +778,7 @@ pub fn run(){
    app:handle.clone(),db:Mutex::new(db),settings:Mutex::new(settings),usage:Mutex::new(cached_usage),
    credits:Mutex::new(cached_credits),global:Mutex::new(cached_global),last_credits:Mutex::new(0),last_global:Mutex::new(0),
    ntfy_status:Mutex::new("尚未測試".into()),armed:Mutex::new(armed),
-   engine:Mutex::new(engine::Engine{recovery,recovery_done_anchor:recovery_done,pending,..Default::default()}),error:Mutex::new({
+   engine:Mutex::new(engine::Engine{recovery,recovery_done_anchor:recovery_done,pending,resume_done_date:resume_done,..Default::default()}),error:Mutex::new({
     #[cfg(target_os="android")] {migration_error}
     #[cfg(not(target_os="android"))] {None}
    }),
