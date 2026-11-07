@@ -160,3 +160,12 @@ button.primary{color:#fff;background:var(--blue);border-color:var(--blue)}
  .history-charts{min-height:240px}
  .history-events{flex-basis:195px}
 }
+
+/* The day editor can choose a reset-driven first start instead of a fixed clock. */
+.day-resume-row{display:flex;flex-direction:column;gap:7px;margin:8px 0;padding:8px 10px;border-radius:10px;border:1px solid var(--border)}
+.day-resume-row label{display:flex;gap:8px;align-items:center;font-size:14px}
+.day-resume-row input{width:18px;min-height:18px}
+.day-resume-row select{margin-left:auto;min-width:78px;min-height:36px}
+.day-resume-row .note{margin:2px 0 0}
+.rule-kind{min-width:92px;max-width:120px;min-height:36px}
+.day-resume-row[hidden],.rule-card[hidden],.rule-chain[hidden],.time-input[hidden]{display:none!important}
