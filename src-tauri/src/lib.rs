@@ -123,12 +123,16 @@ fn replan(s:&State){
  let pending=e.pending;
  let done=e.recovery_done_anchor;
  let resume_done=e.resume_done_date;
+ let chain_remaining=e.chain_remaining;
+ let chain_reset=e.chain_reset;
  drop(e);
  let db=s.db.lock().unwrap();
  let _=if let Some(r)=recovery{storage::save_cached(&db,"missed_anchor_recovery_v1",&r)}
  else{storage::set_meta(&db,"missed_anchor_recovery_v1",None)};
  let _=storage::set_meta(&db,"missed_anchor_recovery_done",Some(&done.to_string()));
  let _=storage::set_meta(&db,"day_resume_done_v1",resume_done.as_ref().map(|x|x.to_string()).as_deref());
+ let _=storage::set_meta(&db,"chain_remaining_v1",Some(&chain_remaining.to_string()));
+ let _=storage::set_meta(&db,"chain_reset_v1",chain_reset.as_ref().map(|x|x.to_string()).as_deref());
  let _=if let Some(p)=pending{storage::save_cached(&db,"five_pending_verification_v1",&p)}
  else{storage::set_meta(&db,"five_pending_verification_v1",None)};
 }
@@ -458,6 +462,7 @@ async fn consume(s:&State,allow_partial:bool,selected:Option<String>)->Result<()
  *s.settings.lock().unwrap()=settings;
  if changed_recovery{
   let mut e=s.engine.lock().unwrap();e.recovery=None;e.recovery_done_anchor=0;e.pending=None;e.resume_done_date=None;e.resume_retry_at=None;
+   e.chain_remaining=0;e.chain_reset=None;
  }
  if changed_mode{
   let mut e=s.engine.lock().unwrap();e.chain_remaining=0;e.chain_reset=None;
@@ -494,6 +499,8 @@ async fn consume(s:&State,allow_partial:bool,selected:Option<String>)->Result<()
  storage::set_meta(&s.db.lock().unwrap(),"missed_anchor_recovery_v1",None)?;
  storage::set_meta(&s.db.lock().unwrap(),"missed_anchor_recovery_done",None)?;
  storage::set_meta(&s.db.lock().unwrap(),"day_resume_done_v1",None)?;
+ storage::set_meta(&s.db.lock().unwrap(),"chain_remaining_v1",None)?;
+ storage::set_meta(&s.db.lock().unwrap(),"chain_reset_v1",None)?;
  storage::set_meta(&s.db.lock().unwrap(),"five_pending_verification_v1",None)?;
  record(&s,"login","已登出；排程已關閉");
  Ok(snapshot(&s))
@@ -771,7 +778,11 @@ pub fn run(){
   let armed=storage::get_meta(&db,"banked_armed");
   let recovery=storage::get_cached::<engine::Recovery>(&db,"missed_anchor_recovery_v1");
   let pending=storage::get_cached::<engine::PendingVerification>(&db,"five_pending_verification_v1");
-  let resume_done=storage::get_meta(&db,"day_resume_done_v1")
+  let chain_remaining=storage::get_meta(&db,"chain_remaining_v1")
+    .and_then(|v|v.parse::<u8>().ok()).unwrap_or(0).min(6);
+   let chain_reset=storage::get_meta(&db,"chain_reset_v1")
+    .and_then(|v|v.parse::<i64>().ok());
+   let resume_done=storage::get_meta(&db,"day_resume_done_v1")
     .and_then(|v|chrono::NaiveDate::parse_from_str(&v,"%Y-%m-%d").ok());
    let recovery_done=storage::get_meta(&db,"missed_anchor_recovery_done")
    .and_then(|v|v.parse::<i64>().ok()).unwrap_or(0);
@@ -781,7 +792,7 @@ pub fn run(){
    app:handle.clone(),db:Mutex::new(db),settings:Mutex::new(settings),usage:Mutex::new(cached_usage),
    credits:Mutex::new(cached_credits),global:Mutex::new(cached_global),last_credits:Mutex::new(0),last_global:Mutex::new(0),
    ntfy_status:Mutex::new("尚未測試".into()),armed:Mutex::new(armed),
-   engine:Mutex::new(engine::Engine{recovery,recovery_done_anchor:recovery_done,pending,resume_done_date:resume_done,..Default::default()}),error:Mutex::new({
+   engine:Mutex::new(engine::Engine{recovery,recovery_done_anchor:recovery_done,pending,resume_done_date:resume_done,chain_remaining,chain_reset,..Default::default()}),error:Mutex::new({
     #[cfg(target_os="android")] {migration_error}
     #[cfg(not(target_os="android"))] {None}
    }),
