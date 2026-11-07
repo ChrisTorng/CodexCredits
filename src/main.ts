@@ -682,9 +682,10 @@ $("day-resume").onchange=()=>{
 $("day-resume-count").onchange=()=>{resumeAutoCount=Number(($("day-resume-count") as HTMLSelectElement).value);drawRuleEditor();};
 function maxSafe(rule:Rule,rules:Rule[],weekly:boolean){
  if(!rule.enabled)return 0;
+ if(rule.start_kind==="resume")return 6;
  const period=weekly?10080:1440;
  const starts:number[]=[];
- for(const r of rules.filter(r=>r.enabled)){
+ for(const r of rules.filter(r=>r.enabled&&r.start_kind!=="resume")){
   for(let day=0;day<(weekly?7:1);day++){
    if(weekly&&!r.days[day])continue;
    starts.push(day*1440+r.hour*60+r.minute);
@@ -702,17 +703,25 @@ function maxSafe(rule:Rule,rules:Rule[],weekly:boolean){
  return Number.isFinite(min)?Math.max(0,Math.min(6,Math.floor(min/300)-1)):3;
 }
 function drawRuleEditor(){
+ configureDayResume();
  const list=$("rule-list");list.replaceChildren();
  const weekly=editing==="weekly";
  list.classList.toggle("disabled-rules",!weekly&&!overrideOn);
  for(const rule of draft){
-  const card=document.createElement("div");card.className="rule-card";
+  const card=document.createElement("div");card.className="rule-card";card.hidden=!weekly&&resumeAutoCount!==null;
   const top=document.createElement("div");top.className="rule-top";
   const enabled=document.createElement("label");enabled.className="check";
   const checkbox=document.createElement("input");checkbox.type="checkbox";checkbox.checked=rule.enabled;
   checkbox.onchange=()=>{rule.enabled=checkbox.checked;drawRuleEditor();};
   enabled.append(checkbox,document.createTextNode("啟用"));top.append(enabled);
+  const type=document.createElement("select");type.className="rule-kind";
+  type.innerHTML='<option value="anchor">固定錨點</option><option value="resume">5h 接續</option>';
+  type.value=rule.start_kind??"anchor";
+  type.onchange=()=>{rule.start_kind=type.value as "anchor"|"resume";if(type.value==="resume")rule.auto_count=0;drawRuleEditor();};
+  if(weekly)top.append(type);
   const time=document.createElement("input");time.type="time";time.value=hhmm(rule);time.className="time-input";
+  time.hidden=rule.start_kind==="resume";
+  if(!weekly)time.min=minAllowedTime(today(editing==="today"?0:1));
   time.onchange=()=>{const [h,m]=time.value.split(":").map(Number);rule.hour=h;rule.minute=m;drawRuleEditor();};top.append(time);
   const del=document.createElement("button");del.textContent="×";del.className="delete-rule";
   del.onclick=()=>{draft=draft.filter(x=>x!==rule);drawRuleEditor();};top.append(del);card.append(top);
@@ -726,7 +735,7 @@ function drawRuleEditor(){
   }
   count.value=String(Math.min(rule.auto_count,maximum));rule.auto_count=Number(count.value);
   count.onchange=()=>{rule.auto_count=Number(count.value);drawRuleEditor();};
-  chain.append(label,count);card.append(chain);
+  chain.append(label,count);chain.hidden=rule.start_kind==="resume";card.append(chain);
   if(weekly){
    const days=document.createElement("div");days.className="rule-days";
    ["一","二","三","四","五","六","日"].forEach((text,i)=>{
@@ -737,11 +746,12 @@ function drawRuleEditor(){
    });card.append(days);
   }
   const preview=document.createElement("p");preview.className="note";
-  preview.textContent="預估："+ruleLabel(rule,false)+(rule.auto_count>=maximum&&maximum>0?" · 已達此錨點安全上限":"");
+  preview.textContent=rule.start_kind==="resume"?"依當日有效的 5h 重置時刻持續接續；不固定每日時刻":
+  "預估："+ruleLabel(rule,false)+(rule.auto_count>=maximum&&maximum>0?" · 已達此錨點安全上限":"");
   card.append(preview);list.append(card);
  }
- if(!draft.length){const p=document.createElement("p");p.className="note";p.textContent="沒有錨點。";list.append(p);}
- ($("rule-add") as HTMLButtonElement).disabled=!weekly&&!overrideOn;
+ if(!draft.length&&resumeAutoCount===null){const p=document.createElement("p");p.className="note";p.textContent="沒有錨點。";list.append(p);}
+ ($("rule-add") as HTMLButtonElement).disabled=!weekly&&(!overrideOn||resumeAutoCount!==null);
 }
 $("rule-add").onclick=()=>{
  const base=draft.at(-1),baseMinute=base?base.hour*60+base.minute+300:360;
@@ -749,7 +759,7 @@ $("rule-add").onclick=()=>{
  for(let i=0;i<288;i++){
   const t=(baseMinute+5*i)%1440;
   const candidate:Rule={id:crypto.randomUUID(),enabled:true,days:[true,true,true,true,true,true,true],
-   hour:Math.floor(t/60),minute:t%60,auto_count:0};
+   hour:Math.floor(t/60),minute:t%60,auto_count:0,start_kind:"anchor"};
   if(maxSafe(candidate,[...draft,candidate],editing==="weekly")>=0){
    const overlaps=draft.some(x=>x.enabled&&Math.min(Math.abs(x.hour*60+x.minute-t),1440-Math.abs(x.hour*60+x.minute-t))<300);
    if(!overlaps){result=candidate;break;}
@@ -762,13 +772,13 @@ $("rule-recommended").onclick=()=>{draft=[{id:crypto.randomUUID(),enabled:true,d
 $("rule-save").onclick=async()=>{
  if(!snapshot)return;
  const weekly=editing==="weekly";
- const rules=draft.map(cloned);
+ const rules=(!weekly&&resumeAutoCount!==null?[]:draft.map(cloned));
  if(rules.some(r=>!r.enabled?false:r.auto_count>maxSafe(r,rules,weekly))){
   toast("存在小於 5 小時的錨點衝突，請修正");return;
  }
  const settings:Settings={...snapshot.settings};
  if(weekly){settings.rules=rules;}
- else{settings.overrides={...settings.overrides,[today(editing==="today"?0:1)]:{enabled:overrideOn,rules}};}
+ else{settings.overrides={...settings.overrides,[today(editing==="today"?0:1)]:{enabled:overrideOn,rules,resume_auto_count:overrideOn?resumeAutoCount:null}};}
  try{await call("save_settings",{settings});($("rule-dialog") as HTMLDialogElement).close();await load();toast("排程設定已儲存");}
  catch(e){toast("無法儲存排程："+String(e));}
 };
