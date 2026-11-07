@@ -90,6 +90,12 @@ final class Scheduler {
     private static final String EVENT_CHAIN="chain";
     private static final String EVENT_ANCHOR_RETRY="anchor_retry";
     private static final String EVENT_RECOVERY="recovery";
+    private static final String EVENT_RESUME="resume";
+    private static final String KEY_RESUME_DONE_DAY="reset_first_done_day";
+    private static final String KEY_RESUME_PENDING_DAY="reset_first_pending_day";
+    private static final String KEY_RESUME_COUNT="reset_first_pending_count";
+    private static final String KEY_RESUME_NEXT_AT="reset_first_next_at";
+    private static final String KEY_RESUME_VERIFY="reset_first_verify_reset";
 
     private static final long RESET_TOLERANCE_MS=60_000L;
     private static final long RESET_GRACE_MS=15_000L;
@@ -146,7 +152,7 @@ final class Scheduler {
 
     static void setMode(Context c,String mode){
         prefs(c).edit().putString(KEY_MODE,mode).remove("scheduler_enabled").apply();
-        if(MODE_OFF.equals(mode)){clearRecovery(c);cancelAlarm(c);}
+        if(MODE_OFF.equals(mode)){clearRecovery(c);clearDailyResume(c);cancelAlarm(c);}
         else reschedule(c);
     }
 
@@ -521,6 +527,8 @@ final class Scheduler {
             runChain(c);
         }else if(EVENT_RECOVERY.equals(kind)){
             runRecovery(c);
+        }else if(EVENT_RESUME.equals(kind)){
+            runResume(c);
         }else{
             runAnchor(c,EVENT_ANCHOR_RETRY.equals(kind));
         }
@@ -904,6 +912,146 @@ final class Scheduler {
             record(c,"補接續失敗: "+safe(e));
             prefs(c).edit().putLong(KEY_RECOVERY_AT,System.currentTimeMillis()+15*60_000L).apply();
             scheduleNextCustom(c,System.currentTimeMillis()+1_000L);
+        }
+    }
+
+    static final class DayResume {
+        final long whenMs;
+        final int autoCount;
+        final String date;
+        DayResume(long at,int count,String date){this.whenMs=at;this.autoCount=count;this.date=date;}
+    }
+
+    static void clearDailyResume(Context c){
+        prefs(c).edit().remove(KEY_RESUME_DONE_DAY).remove(KEY_RESUME_PENDING_DAY)
+                .remove(KEY_RESUME_COUNT).remove(KEY_RESUME_NEXT_AT).remove(KEY_RESUME_VERIFY).apply();
+    }
+
+    private static void clearResumePending(Context c){
+        prefs(c).edit().remove(KEY_RESUME_PENDING_DAY).remove(KEY_RESUME_COUNT)
+                .remove(KEY_RESUME_NEXT_AT).remove(KEY_RESUME_VERIFY).apply();
+    }
+
+    private static DayResume nextDayResume(Context c,long afterMs){
+        SharedPreferences p=prefs(c);
+        ZoneId zone=ZoneId.systemDefault();
+        long now=System.currentTimeMillis();
+        LocalDate today=Instant.ofEpochMilli(now).atZone(zone).toLocalDate();
+        String done=p.getString(KEY_RESUME_DONE_DAY,"");
+        String pending=p.getString(KEY_RESUME_PENDING_DAY,"");
+        // Retain a pending post-request verification or retry across sampling,
+        // process death and Android reboot.
+        long pendingAt=p.getLong(KEY_RESUME_NEXT_AT,0);
+        if(!pending.isEmpty() && pendingAt>0 && !pending.equals(done)){
+            try{
+                LocalDate date=LocalDate.parse(pending);
+                if(!date.isBefore(today) && !date.isAfter(today.plusDays(1)))
+                    return new DayResume(Math.max(now+1_000L,pendingAt),
+                        p.getInt(KEY_RESUME_COUNT,0),pending);
+            }catch(Exception ignored){}
+            clearResumePending(c);
+        }
+        Snapshot q=snapshot(c);
+        for(int offset=0;offset<=7;offset++){
+            LocalDate date=today.plusDays(offset);
+            if(!done.isEmpty()&&date.toString().compareTo(done)<=0)continue;
+            int configured=ScheduleConfig.resumeForDate(c,date);
+            if(configured<0)continue;
+            long start=date.atStartOfDay(zone).toInstant().toEpochMilli();
+            long end=date.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli();
+            long reset=q.primaryConfirmed&&q.primaryResetMs>now?q.primaryResetMs:0;
+            long at=Math.max(Math.max(afterMs,now),Math.max(start,reset))+RESET_GRACE_MS;
+            if(at>=end)continue;
+            ScheduleConfig.Slot anchor=ScheduleConfig.nextAnchor(c,at-1_000L);
+            long nextFixed=anchor==null?Long.MAX_VALUE:anchor.whenMs;
+            if(nextFixed!=Long.MAX_VALUE && at+FIVE_HOURS_MS>nextFixed+RESET_TOLERANCE_MS)continue;
+            // Weekly continuation covers the whole day, with the final 5h
+            // window allowed to cross midnight. Tomorrow resumes at its reset.
+            boolean continuous=ScheduleConfig.continuousForDate(c,date);
+            long latest=continuous?end-1:at+6*FIVE_HOURS_MS;
+            if(nextFixed!=Long.MAX_VALUE)latest=Math.min(latest,nextFixed-FIVE_HOURS_MS);
+            int possible=(int)Math.max(0,Math.min(6,(latest-at)/FIVE_HOURS_MS));
+            return new DayResume(at,Math.min(configured,possible),date.toString());
+        }
+        return null;
+    }
+
+    private static void delayResume(Context c,String date,int count,long at,long verify){
+        SharedPreferences.Editor e=prefs(c).edit()
+                .putString(KEY_RESUME_PENDING_DAY,date)
+                .putInt(KEY_RESUME_COUNT,count)
+                .putLong(KEY_RESUME_NEXT_AT,Math.max(at,System.currentTimeMillis()+1_000L));
+        if(verify>0)e.putLong(KEY_RESUME_VERIFY,verify);
+        else e.remove(KEY_RESUME_VERIFY);
+        e.apply();
+        scheduleNextCustom(c,System.currentTimeMillis()+1_000L);
+    }
+
+    private static void runResume(Context c){
+        SharedPreferences p=prefs(c);
+        String date=p.getString(KEY_RESUME_PENDING_DAY,"");
+        int count=p.getInt(KEY_RESUME_COUNT,0);
+        if(date.isEmpty()){scheduleNextCustom(c,System.currentTimeMillis()+1_000L);return;}
+        LocalDate day;
+        try{day=LocalDate.parse(date);}catch(Exception e){clearResumePending(c);reschedule(c);return;}
+        if(!day.equals(LocalDate.now())){
+            clearResumePending(c);
+            scheduleNextCustom(c,System.currentTimeMillis()+1_000L);
+            return;
+        }
+        try{
+            CodexClient cli=new CodexClient(c);
+            CodexClient.Quota before=cli.getQuota();
+            storeQuota(c,before,false);
+            Snapshot live=snapshot(c);
+            long now=System.currentTimeMillis();
+            long verifying=p.getLong(KEY_RESUME_VERIFY,0);
+            if(verifying>0){
+                if(live.primaryConfirmed&&Math.abs(live.primaryResetMs-verifying)<=20_000L){
+                    prefs(c).edit().putString(KEY_RESUME_DONE_DAY,date).apply();
+                    clearResumePending(c);
+                    record(c,"已確認首次 5h 接續，啟動後續排程");
+                    startChainFrom(c,before,count);
+                    scheduleNextCustom(c,now+1_000L);
+                }else{
+                    record(c,"首次接續尚待伺服器確認，15 分鐘後再驗證");
+                    delayResume(c,date,count,now+15*60_000L,0);
+                }
+                return;
+            }
+            if(live.primaryConfirmed&&live.primaryResetMs>now){
+                record(c,"接續等待目前有效 5h 視窗真正結束");
+                delayResume(c,date,count,live.primaryResetMs+RESET_GRACE_MS,0);
+                return;
+            }
+            if(blocked(before)){
+                record(c,"首次接續因週配額限制，15 分鐘後確認");
+                delayResume(c,date,count,now+15*60_000L,0);
+                return;
+            }
+            long requestedAt=System.currentTimeMillis();
+            cli.triggerMinimal();
+            Thread.sleep(2_000L);
+            CodexClient.Quota after=cli.getQuota();
+            if(newWindowConfirmed(before,after,requestedAt)){
+                storeQuota(c,after,true);
+                prefs(c).edit().putString(KEY_RESUME_DONE_DAY,date).apply();
+                clearResumePending(c);
+                record(c,"首次 5h 接續成功");
+                notifyNtfy(c,"Codex 5h 已依重置接續",quotaNotification(after));
+                startChainFrom(c,after,count);
+                scheduleNextCustom(c,System.currentTimeMillis()+1_000L);
+            }else{
+                storeQuota(c,after,false);
+                long reset=after.primary==null?0:after.primary.resetAt*1000L;
+                boolean plausible=reset>0&&Math.abs(reset-requestedAt-FIVE_HOURS_MS)<=180_000L;
+                record(c,plausible?"首次接續請求完成，稍後驗證新視窗":"首次接續未確認，稍後重試");
+                delayResume(c,date,count,System.currentTimeMillis()+(plausible?150_000L:15*60_000L),
+                        plausible?reset:0);
+            }
+        }catch(Exception e){
+            record(c,"首次 5h 接續失敗："+safe(e));
+            delayResume(c,date,count,System.currentTimeMillis()+15*60_000L,0);
         }
     }
 
