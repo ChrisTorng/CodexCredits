@@ -1058,6 +1058,8 @@ final class Scheduler {
     static void scheduleNextCustom(Context c,long afterMs){
         detectMissedToday(c,System.currentTimeMillis());
         ScheduleConfig.Slot anchor=ScheduleConfig.nextAnchor(c,afterMs);
+        DayResume resume=nextDayResume(c,afterMs);
+        long resumeMs=resume==null?Long.MAX_VALUE:resume.whenMs;
         long anchorMs=anchor==null?Long.MAX_VALUE:anchor.whenMs;
 
         int remaining=chainRemaining(c);
@@ -1073,19 +1075,27 @@ final class Scheduler {
         if(recoveryMs<=0)recoveryMs=Long.MAX_VALUE;
         else recoveryMs=Math.max(afterMs+1_000L,recoveryMs);
 
-        if(recoveryMs==Long.MAX_VALUE && chainMs==Long.MAX_VALUE && anchorMs==Long.MAX_VALUE){
+        if(recoveryMs==Long.MAX_VALUE && chainMs==Long.MAX_VALUE && anchorMs==Long.MAX_VALUE && resumeMs==Long.MAX_VALUE){
             cancelAlarm(c);
             prefs(c).edit().putString(KEY_NEXT_REASON,"尚未設定可用時段").apply();
             return;
         }
 
-        if(recoveryMs<=anchorMs && recoveryMs<=chainMs){
+        if(recoveryMs<=anchorMs && recoveryMs<=chainMs && recoveryMs<=resumeMs){
             String reason=prefs(c).getLong(KEY_VERIFY_RESET,0)>0
                     ?"確認已發送的 Codex 請求是否啟動 5h":
                     "錯過錨點 · 今日補接續，後續自動 "+recoveryCount+" 次";
             scheduleEvent(c,recoveryMs,reason,EVENT_RECOVERY,recoveryCount);
-        }else if(chainMs<=anchorMs){
+        }else if(chainMs<=anchorMs && chainMs<=resumeMs){
             scheduleEvent(c,chainMs,"自動接續，尚餘 "+remaining+" 次",EVENT_CHAIN,0);
+         }else if(resumeMs<=anchorMs){
+            SharedPreferences.Editor e=prefs(c).edit()
+                    .putString(KEY_RESUME_PENDING_DAY,resume.date)
+                    .putInt(KEY_RESUME_COUNT,resume.autoCount)
+                    .putLong(KEY_RESUME_NEXT_AT,resume.whenMs);
+            e.apply();
+            scheduleEvent(c,resume.whenMs,"5h 重置後接續，後續自動 "+resume.autoCount+" 次",
+                    EVENT_RESUME,resume.autoCount);
         }else{
             scheduleEvent(c,anchor.whenMs,
                     anchor.source+"錨點"+(anchor.autoCount>0?"，後續自動 "+anchor.autoCount+" 次":""),
