@@ -74,6 +74,8 @@ final class Scheduler {
     private static final String KEY_NEXT_AUTO_COUNT="next_event_auto_count";
     private static final String KEY_CHAIN_REMAINING="chain_remaining";
     private static final String KEY_CHAIN_RESET="chain_reset_ms";
+    private static final String KEY_CHAIN_VERIFY_RESET="chain_verify_reset_ms";
+    private static final String KEY_CHAIN_VERIFY_AT="chain_verify_at_ms";
     // Persist the recovery alarm across process death, reboots and quota refreshes.
     private static final String KEY_MISSED_POLICY="missed_anchor_policy";
     private static final String KEY_RECOVERY_AT="missed_anchor_recovery_at_ms";
@@ -576,6 +578,32 @@ final class Scheduler {
             long now=System.currentTimeMillis();
 
             Snapshot observed=snapshot(c);
+            // A prior request can have an asynchronous quota update. Verify it
+            // before decrementing the remaining continuation count.
+            long expectedReset=prefs(c).getLong(KEY_CHAIN_VERIFY_RESET,0);
+            if(expectedReset>0){
+                long verifyAt=prefs(c).getLong(KEY_CHAIN_VERIFY_AT,0);
+                if(now<verifyAt){
+                    scheduleEvent(c,verifyAt,"確認上一個 5h 接續",EVENT_CHAIN,0);
+                    return;
+                }
+                prefs(c).edit().remove(KEY_CHAIN_VERIFY_RESET).remove(KEY_CHAIN_VERIFY_AT).apply();
+                if(observed.primaryConfirmed&&Math.abs(observed.primaryResetMs-expectedReset)<=20_000L){
+                    remaining--;
+                    record(c,"已確認上一個 5h 自動接續"+(remaining>0?"，尚餘 "+remaining+" 次":""));
+                    startChainFrom(c,q,remaining);
+                    scheduleNextCustom(c,now+1_000L);
+                    return;
+                }
+                record(c,"上一個接續尚未獲官方確認，未扣除接續次數");
+                if(observed.primaryConfirmed&&observed.primaryResetMs>now){
+                    scheduleEvent(c,observed.primaryResetMs+RESET_GRACE_MS,
+                            "等待確認的 5h 視窗結束",EVENT_CHAIN,0);
+                }else{
+                    scheduleEvent(c,now+15*60_000L,"接續確認失敗，稍後再試",EVENT_CHAIN,0);
+                }
+                return;
+            }
             if(observed.primaryConfirmed && observed.primaryResetMs>now){
                 long reset=observed.primaryResetMs;
                 long wait=reset-now;
@@ -693,9 +721,27 @@ final class Scheduler {
                 return;
             }
 
+            long requestedAt=System.currentTimeMillis();
             cli.triggerMinimal();
             Thread.sleep(2_000L);
             CodexClient.Quota after=cli.getQuota();
+            if(!newWindowConfirmed(q,after,requestedAt)){
+                storeQuota(c,after,false);
+                long estimated=after.primary==null?0:after.primary.resetAt*1000L;
+                boolean plausible=estimated>0&&Math.abs(estimated-requestedAt-FIVE_HOURS_MS)<=180_000L;
+                if(plausible){
+                    long verificationAt=System.currentTimeMillis()+150_000L;
+                    prefs(c).edit().putLong(KEY_CHAIN_VERIFY_RESET,estimated)
+                            .putLong(KEY_CHAIN_VERIFY_AT,verificationAt).apply();
+                    record(c,"接續請求已完成，稍後確認新 5h 視窗");
+                    scheduleEvent(c,verificationAt,"驗證接續是否成功",EVENT_CHAIN,0);
+                }else{
+                    record(c,"接續請求尚未確認，15 分鐘後重試");
+                    scheduleEvent(c,System.currentTimeMillis()+15*60_000L,
+                            "接續未確認，稍後重試",EVENT_CHAIN,0);
+                }
+                return;
+            }
             storeQuota(c,after,true);
             remaining--;
             record(c,"自動接續觸發成功"+(remaining>0?"，尚餘 "+remaining+" 次":""));
@@ -746,7 +792,8 @@ final class Scheduler {
     }
 
     private static void clearChain(Context c){
-        prefs(c).edit().remove(KEY_CHAIN_REMAINING).remove(KEY_CHAIN_RESET).apply();
+        prefs(c).edit().remove(KEY_CHAIN_REMAINING).remove(KEY_CHAIN_RESET)
+                .remove(KEY_CHAIN_VERIFY_RESET).remove(KEY_CHAIN_VERIFY_AT).apply();
     }
 
     static void reschedule(Context c){
@@ -1064,7 +1111,10 @@ final class Scheduler {
 
         int remaining=chainRemaining(c);
         long reset=chainResetMs(c);
-        long chainMs=(remaining>0&&reset>0)?Math.max(afterMs+1_000L,reset+RESET_GRACE_MS):Long.MAX_VALUE;
+        long verifying=prefs(c).getLong(KEY_CHAIN_VERIFY_AT,0);
+        long chainMs=remaining>0&&verifying>0?
+                Math.max(afterMs+1_000L,verifying):
+                (remaining>0&&reset>0)?Math.max(afterMs+1_000L,reset+RESET_GRACE_MS):Long.MAX_VALUE;
         if(chainMs!=Long.MAX_VALUE && chainWouldBlockNextAnchor(c,chainMs)){
             clearChain(c);
             remaining=0;
