@@ -136,6 +136,7 @@ fn replan(s:&State){
  let resume_done=e.resume_done_date;
  let chain_remaining=e.chain_remaining;
  let chain_reset=e.chain_reset;
+  let chain_retry_at=e.chain_retry_at;
  drop(e);
  let db=s.db.lock().unwrap();
  let _=if let Some(r)=recovery{storage::save_cached(&db,"missed_anchor_recovery_v1",&r)}
@@ -144,6 +145,7 @@ fn replan(s:&State){
  let _=storage::set_meta(&db,"day_resume_done_v1",resume_done.as_ref().map(|x|x.to_string()).as_deref());
  let _=storage::set_meta(&db,"chain_remaining_v1",Some(&chain_remaining.to_string()));
  let _=storage::set_meta(&db,"chain_reset_v1",chain_reset.as_ref().map(|x|x.to_string()).as_deref());
+  let _=storage::set_meta(&db,"chain_retry_at_v1",chain_retry_at.as_ref().map(|x|x.to_string()).as_deref());
  let _=if let Some(p)=pending{storage::save_cached(&db,"five_pending_verification_v1",&p)}
  else{storage::set_meta(&db,"five_pending_verification_v1",None)};
 }
@@ -402,7 +404,7 @@ async fn trigger(s:&State,followups:u8,kind:&str)->Result<TriggerOutcome,String>
    if followups>0 {
     let reset=engine::reset_timestamp(after.five_reset.as_ref());
     let mut e=s.engine.lock().unwrap();
-    e.chain_remaining=followups;e.chain_reset=reset;
+    e.chain_remaining=followups;e.chain_reset=reset;e.chain_retry_at=None;
    }
    notify(s,"Codex 5h 視窗啟動已確認",&format!("5h 剩餘 {:.0}%",100.-after.five_hour.unwrap_or(0.))).await;
   },
@@ -473,10 +475,10 @@ async fn consume(s:&State,allow_partial:bool,selected:Option<String>)->Result<()
  *s.settings.lock().unwrap()=settings;
  if changed_recovery{
   let mut e=s.engine.lock().unwrap();e.recovery=None;e.recovery_done_anchor=0;e.pending=None;e.resume_done_date=None;e.resume_retry_at=None;
-   e.chain_remaining=0;e.chain_reset=None;
+   e.chain_remaining=0;e.chain_reset=None;e.chain_retry_at=None;
  }
  if changed_mode{
-  let mut e=s.engine.lock().unwrap();e.chain_remaining=0;e.chain_reset=None;
+  let mut e=s.engine.lock().unwrap();e.chain_remaining=0;e.chain_reset=None;e.chain_retry_at=None;
   record(&s,"mode","排程模式已變更");
  }
  replan(&s);Ok(snapshot(&s))
@@ -506,12 +508,13 @@ async fn consume(s:&State,allow_partial:bool,selected:Option<String>)->Result<()
   #[cfg(target_os="android")]
   android_bridge::sync_settings(&serde_json::to_string(&copy).map_err(|e|e.to_string())?)?;
  }
- {let mut e=s.engine.lock().unwrap();e.chain_remaining=0;e.chain_reset=None;e.next=None;e.recovery=None;e.recovery_done_anchor=0;e.pending=None;e.resume_done_date=None;e.resume_retry_at=None;}
+ {let mut e=s.engine.lock().unwrap();e.chain_remaining=0;e.chain_reset=None;e.chain_retry_at=None;e.next=None;e.recovery=None;e.recovery_done_anchor=0;e.pending=None;e.resume_done_date=None;e.resume_retry_at=None;}
  storage::set_meta(&s.db.lock().unwrap(),"missed_anchor_recovery_v1",None)?;
  storage::set_meta(&s.db.lock().unwrap(),"missed_anchor_recovery_done",None)?;
  storage::set_meta(&s.db.lock().unwrap(),"day_resume_done_v1",None)?;
  storage::set_meta(&s.db.lock().unwrap(),"chain_remaining_v1",None)?;
  storage::set_meta(&s.db.lock().unwrap(),"chain_reset_v1",None)?;
+  storage::set_meta(&s.db.lock().unwrap(),"chain_retry_at_v1",None)?;
  storage::set_meta(&s.db.lock().unwrap(),"five_pending_verification_v1",None)?;
  record(&s,"login","已登出；排程已關閉");
  Ok(snapshot(&s))
@@ -601,6 +604,14 @@ fn defer_scheduled_retry(s:&State,planned:&engine::Next,seconds:i64){
   if let Some(ref mut p)=e.pending{p.at=now()+seconds;}
   drop(e);replan(s);return;
  }
+  if planned.kind==engine::Kind::Chain{
+   e.chain_retry_at=Some(now()+seconds);
+   drop(e);replan(s);return;
+  }
+  if matches!(planned.kind,engine::Kind::Anchor|engine::Kind::AnchorRetry){
+   e.recovery=Some(engine::Recovery{anchor_at:planned.at,at:now()+seconds,auto_count:planned.auto_count});
+   drop(e);replan(s);return;
+  }
  e.next=Some(engine::Next{
   at:now()+seconds,kind:planned.kind,auto_count:planned.auto_count,
   reason:format!("失敗後 {} 分鐘再檢查",seconds/60),
@@ -635,17 +646,24 @@ async fn run_planned(s:&State,planned:engine::Next){
     let fixed=engine::confirmed(&quota,now())
      && actual_reset.is_some_and(|r|(r-pending.expected_reset).abs()<=20);
     if fixed{
-     if pending.auto_count>0{
       e.chain_remaining=pending.auto_count;
-      e.chain_reset=actual_reset;
+      e.chain_reset=if pending.auto_count>0{actual_reset}else{None};
+      e.chain_retry_at=None;
      }
      if pending.from_recovery{
       if let Some(r)=e.recovery.take(){e.recovery_done_anchor=r.anchor_at;}
      }
      if let Some(date)=pending.resume_date{e.resume_done_date=Some(date);e.resume_retry_at=None;}
     }else{
-     if pending.from_recovery{if let Some(ref mut r)=e.recovery{r.at=now()+900;}}
-     if pending.resume_date.is_some(){e.resume_retry_at=Some(now()+900);}
+      if pending.from_recovery{if let Some(ref mut r)=e.recovery{r.at=now()+900;}}
+      else if pending.resume_date.is_some(){e.resume_retry_at=Some(now()+900);}
+      else if e.chain_remaining>0{
+       e.chain_retry_at=Some(now()+900);
+       if let Some(actual)=actual_reset.filter(|v|*v>now()){e.chain_reset=Some(actual);}
+      }else{
+       e.recovery=Some(engine::Recovery{
+        anchor_at:pending.at.saturating_sub(150),at:now()+900,auto_count:pending.auto_count});
+      }
     }
     Some(fixed)
    }else{None}
@@ -678,9 +696,13 @@ async fn run_planned(s:&State,planned:engine::Next){
    return;
   }
  }
- if let Err(e)=engine::can_trigger(&quota,now()){
-  record(s,"scheduler",&format!("略過排程: {e}"));
-  replan(s);return;
+  if let Err(e)=engine::can_trigger(&quota,now()){
+   record(s,"scheduler",&format!("略過排程: {e}"));
+   if matches!(planned.kind,engine::Kind::Resume|engine::Kind::Chain)&&engine::blocked(&quota){
+    defer_scheduled_retry(s,&planned,900);
+   }else{replan(s);}
+   return;
+  }
  }
  let followups=if mode==schedule::Mode::Custom{
   if planned.kind==engine::Kind::Chain{s.engine.lock().unwrap().chain_remaining.saturating_sub(1)}
@@ -746,7 +768,7 @@ async fn run_planned(s:&State,planned:engine::Next){
   }
  }
  if planned.kind==engine::Kind::Chain&&followups==0{
-  let mut e=s.engine.lock().unwrap();e.chain_remaining=0;e.chain_reset=None;
+  let mut e=s.engine.lock().unwrap();e.chain_remaining=0;e.chain_reset=None;e.chain_retry_at=None;
  }
  replan(s);
 }
@@ -799,6 +821,8 @@ pub fn run(){
     .and_then(|v|v.parse::<u8>().ok()).unwrap_or(0).min(6);
    let chain_reset=storage::get_meta(&db,"chain_reset_v1")
     .and_then(|v|v.parse::<i64>().ok());
+    let chain_retry_at=storage::get_meta(&db,"chain_retry_at_v1")
+     .and_then(|v|v.parse::<i64>().ok());
    let resume_done=storage::get_meta(&db,"day_resume_done_v1")
     .and_then(|v|chrono::NaiveDate::parse_from_str(&v,"%Y-%m-%d").ok());
    let recovery_done=storage::get_meta(&db,"missed_anchor_recovery_done")
@@ -809,7 +833,7 @@ pub fn run(){
    app:handle.clone(),db:Mutex::new(db),settings:Mutex::new(settings),usage:Mutex::new(cached_usage),
    credits:Mutex::new(cached_credits),global:Mutex::new(cached_global),last_credits:Mutex::new(0),last_global:Mutex::new(0),
    ntfy_status:Mutex::new("尚未測試".into()),armed:Mutex::new(armed),
-   engine:Mutex::new(engine::Engine{recovery,recovery_done_anchor:recovery_done,pending,resume_done_date:resume_done,chain_remaining,chain_reset,..Default::default()}),error:Mutex::new({
+   engine:Mutex::new(engine::Engine{recovery,recovery_done_anchor:recovery_done,pending,resume_done_date:resume_done,chain_remaining,chain_reset,chain_retry_at,..Default::default()}),error:Mutex::new({
     #[cfg(target_os="android")] {migration_error}
     #[cfg(not(target_os="android"))] {None}
    }),
