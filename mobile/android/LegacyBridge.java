@@ -216,7 +216,8 @@ public final class LegacyBridge {
                     JSONObject o=overrides.optJSONObject(date);
                     if(o!=null)converted.put(date,new JSONObject()
                         .put("enabled",o.optBoolean("enabled"))
-                        .put("rules",convertRules(o.optJSONArray("rules"))));
+                        .put("rules",convertRules(o.optJSONArray("rules")))
+                        .put("resumeAutoCount",o.has("resume_auto_count") && !o.isNull("resume_auto_count") ? o.optInt("resume_auto_count") : JSONObject.NULL));
                 }
             }
             String oldOverrides=p.getString("schedule_day_overrides_v2","");
@@ -245,6 +246,7 @@ public final class LegacyBridge {
                     .put("hour",r.optInt("hour",6))
                     .put("minute",r.optInt("minute",0))
                     .put("autoCount",r.optInt("auto_count",0))
+                     .put("startKind",r.optString("start_kind","anchor"))
                     .put("days",bits.toString()));
             }catch(Exception ignored){}
         }
