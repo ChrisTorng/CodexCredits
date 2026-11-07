@@ -586,32 +586,6 @@ final class Scheduler {
             long now=System.currentTimeMillis();
 
             Snapshot observed=snapshot(c);
-            // A prior request can have an asynchronous quota update. Verify it
-            // before decrementing the remaining continuation count.
-            long expectedReset=prefs(c).getLong(KEY_CHAIN_VERIFY_RESET,0);
-            if(expectedReset>0){
-                long verifyAt=prefs(c).getLong(KEY_CHAIN_VERIFY_AT,0);
-                if(now<verifyAt){
-                    scheduleEvent(c,verifyAt,"確認上一個 5h 接續",EVENT_CHAIN,0);
-                    return;
-                }
-                prefs(c).edit().remove(KEY_CHAIN_VERIFY_RESET).remove(KEY_CHAIN_VERIFY_AT).apply();
-                if(observed.primaryConfirmed&&Math.abs(observed.primaryResetMs-expectedReset)<=20_000L){
-                    remaining--;
-                    record(c,"已確認上一個 5h 自動接續"+(remaining>0?"，尚餘 "+remaining+" 次":""));
-                    startChainFrom(c,q,remaining);
-                    scheduleNextCustom(c,now+1_000L);
-                    return;
-                }
-                record(c,"上一個接續尚未獲官方確認，未扣除接續次數");
-                if(observed.primaryConfirmed&&observed.primaryResetMs>now){
-                    scheduleEvent(c,observed.primaryResetMs+RESET_GRACE_MS,
-                            "等待確認的 5h 視窗結束",EVENT_CHAIN,0);
-                }else{
-                    scheduleEvent(c,now+15*60_000L,"接續確認失敗，稍後再試",EVENT_CHAIN,0);
-                }
-                return;
-            }
             if(observed.primaryConfirmed && observed.primaryResetMs>now){
                 long reset=observed.primaryResetMs;
                 long wait=reset-now;
@@ -703,6 +677,32 @@ final class Scheduler {
             long now=System.currentTimeMillis();
 
             Snapshot observed=snapshot(c);
+            // A prior request can have an asynchronous quota update. Verify it
+            // before decrementing the remaining continuation count.
+            long expectedReset=prefs(c).getLong(KEY_CHAIN_VERIFY_RESET,0);
+            if(expectedReset>0){
+                long verifyAt=prefs(c).getLong(KEY_CHAIN_VERIFY_AT,0);
+                if(now<verifyAt){
+                    scheduleEvent(c,verifyAt,"確認上一個 5h 接續",EVENT_CHAIN,0);
+                    return;
+                }
+                prefs(c).edit().remove(KEY_CHAIN_VERIFY_RESET).remove(KEY_CHAIN_VERIFY_AT).apply();
+                if(observed.primaryConfirmed&&Math.abs(observed.primaryResetMs-expectedReset)<=20_000L){
+                    remaining--;
+                    record(c,"已確認上一個 5h 自動接續"+(remaining>0?"，尚餘 "+remaining+" 次":""));
+                    startChainFrom(c,q,remaining);
+                    scheduleNextCustom(c,now+1_000L);
+                    return;
+                }
+                record(c,"上一個接續尚未獲官方確認，未扣除接續次數");
+                if(observed.primaryConfirmed&&observed.primaryResetMs>now){
+                    scheduleEvent(c,observed.primaryResetMs+RESET_GRACE_MS,
+                            "等待確認的 5h 視窗結束",EVENT_CHAIN,0);
+                }else{
+                    scheduleEvent(c,now+15*60_000L,"接續確認失敗，稍後再試",EVENT_CHAIN,0);
+                }
+                return;
+            }
             if(observed.primaryConfirmed && observed.primaryResetMs>now){
                 long reset=observed.primaryResetMs;
                 long triggerAt=Math.max(now+5_000L,reset+RESET_GRACE_MS);
