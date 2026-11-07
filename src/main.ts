@@ -21,7 +21,7 @@ type Override={enabled:boolean;rules:Rule[];resume_auto_count?:number|null};
 type Settings={mode:Mode;missed_anchor_policy:MissedPolicy;sampling_minutes:number;retention_days:number;rules:Rule[];overrides:Record<string,Override>;ntfy_topic:string;theme:string;native_notify_enabled:boolean};
 type Usage={five_hour:number|null;weekly:number|null;five_reset:string|null;weekly_reset:string|null;primary_confirmed:boolean;plan:string;allowed:boolean;limit_reached:boolean;checked_at:string};
 type Credit={id:string;title:string;description:string;expires_at:string};
-type Snapshot={settings:Settings;usage:Usage|null;credits:{count:number;available:Credit[]}|null;global:{last_reset_at:string|null;age_days:number|null;p24:number|null;p48:number|null;avg_days:number|null;median_days:number|null;median_estimate_at:string|null}|null;armed:boolean;ntfy_status:string;next:{at:number;kind:string;reason:string;auto_count:number}|null;projected_busy_until?:number|null;error:string|null;signed_in:boolean};
+type Snapshot={settings:Settings;usage:Usage|null;credits:{count:number;available:Credit[]}|null;global:{last_reset_at:string|null;age_days:number|null;p24:number|null;p48:number|null;avg_days:number|null;median_days:number|null;median_estimate_at:string|null}|null;armed:boolean;ntfy_status:string;next:{at:number;kind:string;reason:string;auto_count:number}|null;projected_busy_until?:number|null;error:string|null;signed_in:boolean;auth_checked?:boolean};
 type Sample={at:string;five_hour:number|null;weekly:number|null;five_reset:string|null;weekly_reset:string|null};
 type Event={at:string;kind:string;detail:string};
 const $=(id:string)=>document.getElementById(id)!;
@@ -32,9 +32,9 @@ app.innerHTML=[
 '<nav class="tabs" aria-label="功能選單"><button class="tab narrow-tab active" data-tab="status">● 狀態</button><button class="tab narrow-tab" data-tab="history">▥ 歷程</button><button class="tab narrow-tab" data-tab="schedule">◷ 排程</button><button class="tab narrow-tab" data-tab="settings">⚙ 設定</button><button class="tab wide-tab active" data-group="usage">● 狀態與歷程</button><button class="tab wide-tab" data-group="planning">◷ 排程與設定</button></nav>',
 '<div class="content">',
 '<main class="page visible" id="page-status">',
-'<p id="account" class="account">ChatGPT 尚未登入</p>',
+'<p id="account" class="account">正在載入本機用量紀錄…</p>',
 '<section class="card quota"><div class="card-title"><strong>5 小時</strong><strong id="primary-percent">—</strong></div><div class="quota-chart" id="primary-chart"></div></section>',
-'<section class="card quota"><div class="card-title"><strong>週配額</strong><strong id="weekly-percent">—</strong></div><div class="quota-chart" id="weekly-chart"></div></section>',
+'<section class="card quota"><div class="card-title"><strong>週用量</strong><strong id="weekly-percent">—</strong></div><div class="quota-chart" id="weekly-chart"></div></section>',
 '<section class="card compact"><h2>下一次排程</h2><p id="status-next">尚未排程</p></section>',
 '<p id="trigger-preview" class="note">請先登入</p>',
 '<div class="button-row"><button id="check" class="action">更新用量</button><button id="trigger" class="action" title="以最小 Codex 請求開始 5 小時用量視窗">開始 5h</button></div>',
@@ -54,7 +54,7 @@ app.innerHTML=[
 '<main class="page history-page" id="page-history">',
 '<div class="history-charts"><div class="history-chart" id="yesterday-chart"></div><div class="history-chart" id="today-chart"></div></div>',
 
-'<section class="card history-events"><h2>事件與採樣</h2><div id="event-list">尚無配額採樣</div></section>',
+'<section class="card history-events"><h2>事件與採樣</h2><div id="event-list">尚無用量採樣</div></section>',
 '</main>',
 '<main class="page" id="page-settings">',
 '<section class="card compact"><h2>ChatGPT</h2><p id="settings-account">尚未登入</p></section>',
@@ -221,9 +221,22 @@ function paintQuota(id:string,used:number|null|undefined,reset:string|null|undef
   const t=Date.parse(x.at),r=weekly?x.weekly_reset:x.five_reset;
   return t>=start-60000&&t<=until+60000&&r&&Math.abs(Date.parse(r)-until)<=120000;
  }):[];
+  // Display cached samples even while the current usage API and login are pending.
+  const lastSample=samples.at(-1);
+  const historyUntil=lastSample?Date.parse(lastSample.at):NaN;
+  const historySpan=weekly?7*24*3600000:FIVE_HOUR_MS;
+  const historic=samples.filter(x=>{
+   const t=Date.parse(x.at);
+   return Number.isFinite(historyUntil)&&t>=historyUntil-historySpan&&t<=historyUntil
+    &&(weekly?x.weekly:x.five_hour)!=null;
+  }).map(x=>[Date.parse(x.at),safeRemaining(weekly?x.weekly:x.five_hour)] as [number,number|null]);
  // Unconfirmed reset_at can be a sliding placeholder. A sample alone
  // must not create 04:47–09:47 boundaries on the status card.
  const valid=resetKnown&&(weekly||confirmed);
+  const historyOnly=!valid||source.length===0;
+  const historicAvailable=historyOnly&&historic.length>0;
+  const plotStart=valid?start:historicAvailable?historyUntil-historySpan:undefined;
+  const plotEnd=valid?until:historicAvailable?historyUntil+60000:undefined;
  const color=weekly?"#e89134":"#2f80ed";
  const actual=source.map(x=>[Date.parse(x.at),safeRemaining(weekly?x.weekly:x.five_hour)]);
  // Unconfirmed historical samples never justify an invented ideal 5h slope.
@@ -250,7 +263,7 @@ function paintQuota(id:string,used:number|null|undefined,reset:string|null|undef
  chart.setOption({
   backgroundColor:"transparent",animation:false,
   grid:{left:5,right:5,top:6,bottom:20,containLabel:false},
-  xAxis:{type:"time",min:valid?start:undefined,max:valid?until:undefined,
+  xAxis:{type:"time",min:plotStart,max:plotEnd,
    axisLine:{show:false},splitLine:{show:!valid,lineStyle:{color:p.grid}},axisLabel:{show:!valid},axisTick:{show:false}},
   yAxis:{type:"value",min:0,max:100,interval:50,axisLabel:{show:false},axisLine:{show:false},axisTick:{show:false},splitLine:{lineStyle:{color:p.grid}}},
   tooltip:{trigger:"axis",confine:true,
@@ -259,16 +272,17 @@ function paintQuota(id:string,used:number|null|undefined,reset:string|null|undef
     valueFormatter:(v:unknown)=>typeof v==="number"?Math.round(v)+"% 剩餘":String(v)},
   series:[
    {name:"理想剩餘",type:"line",data:ideal,showSymbol:false,silent:true,lineStyle:{color,type:"dashed",width:1.5,opacity:.8},areaStyle:{color,opacity:.08}},
-   {name:"實際剩餘",type:"line",data:valid?actual:[],showSymbol:false,lineStyle:{width:2.4,color},itemStyle:{color},areaStyle:{color,opacity:.18},
+   {name:"實際剩餘",type:"line",data:historyOnly?historic:actual,showSymbol:false,lineStyle:{width:2.4,color},itemStyle:{color},areaStyle:{color,opacity:.18},
     markLine:valid?{symbol:["none","none"],silent:true,label:{show:false},
       lineStyle:{color:p.grid,width:1,type:"solid"},
       data:[{xAxis:start},{xAxis:until},...ticks.map(t=>({xAxis:t})),...creditMarker,...(inWindow?[{xAxis:now,lineStyle:{color:p.text,type:"dashed",width:1}}]:[])]}:undefined}
   ],
   graphic:valid?[boundary(start,false),...tickLabels,boundary(until,true)]:[{
-   type:"text",left:10,top:"45%",style:{text:
+   type:"text",left:10,top:historicAvailable?6:"45%",style:{text:historicAvailable?"歷史用量 · 上次記錄 "+fdate(lastSample?.at??""):
+    !snapshot?.auth_checked?"正在確認登入狀態":
     !snapshot?.signed_in?"請先登入":
-    !snapshot?.usage?.checked_at?"正在取得最新配額…":
-    (now-Date.parse(snapshot.usage.checked_at)>15*60000)?"等待更新配額…":
+    !snapshot?.usage?.checked_at?"正在取得最新用量…":
+    (now-Date.parse(snapshot.usage.checked_at)>15*60000)?"等待更新用量…":
     weekly?"未啟動":"尚未啟動 · 等待觸發",fill:p.text,fontSize:11}
   }]
  },true);
@@ -306,9 +320,9 @@ function paintHistory(id:string,offset:number){
  const markData=[...new Set([...guides,...boundaries])].sort((a,b)=>a-b).map(t=>({
   xAxis:t,lineStyle:{type:"solid",color:p.grid,width:1.3}
  }));
- const palette=[["5 小時","#2f80ed"],["週配額","#e89134"]] as const;
+ const palette=[["5 小時","#2f80ed"],["週用量","#e89134"]] as const;
  const weeklyIdeal=()=>weeklyWindows.map(w=>({
-  name:"週配額理想",type:"line",showSymbol:false,silent:true,
+  name:"週用量理想",type:"line",showSymbol:false,silent:true,
   data:idealQuotaSegment(w,start,Math.min(end,now),7*24*3600000),
   lineStyle:{color:palette[1][1],type:"dashed",width:1.2,opacity:.85},
   tooltip:{show:false}
@@ -338,7 +352,7 @@ function paintHistory(id:string,offset:number){
    {name:"5 小時",type:"line",data:actual("five_hour"),showSymbol:false,
     lineStyle:{color:palette[0][1],width:2},itemStyle:{color:palette[0][1]},
     markLine:markData.length?{symbol:["none","none"],silent:true,label:{show:false},data:markData}:undefined},
-   {name:"週配額",type:"line",data:actual("weekly"),showSymbol:false,
+   {name:"週用量",type:"line",data:actual("weekly"),showSymbol:false,
     lineStyle:{color:palette[1][1],width:2},itemStyle:{color:palette[1][1]},
     markLine:globalMark?{symbol:["none","none"],silent:true,label:{show:false},data:[globalMark]}:undefined}
   ]
@@ -365,7 +379,7 @@ function render(){
   ?(authInvalid?"ChatGPT 憑證已失效 · 請重新登入":"ChatGPT 已登入 · "+(u?.plan??"—")+
     (u?.checked_at?(cachedReading?" · 上次採樣 ":" · 更新 ")+fdate(u.checked_at):"")+
     (cachedReading?" · 更新中":""))
-  :"ChatGPT 尚未登入";
+  :!s.auth_checked?"正在確認登入狀態 · 歷史用量可離線檢視":"ChatGPT 尚未登入";
  $("primary-percent").textContent=percent(u?.five_hour);
  $("weekly-percent").textContent=percent(u?.weekly);
  $("status-next").textContent=mode==="off"?"已關閉 · 尚未排程":
@@ -384,8 +398,8 @@ function render(){
  $("reset-action").textContent=s.signed_in&&!stale&&banked.eligible?"使用 Banked Reset":"管理 Banked Reset";
  ($("reset-action") as HTMLButtonElement).hidden=available<=0&&!s.armed;
  const active=activeCreditsByExpiry(credits?.available??[]);
- const bankedNote=stale?"用量尚未更新，立即使用前須取得最新配額":
-  !banked.known?"目前缺少可核對的配額資料":
+ const bankedNote=stale?"用量尚未更新，立即使用前須取得最新用量":
+  !banked.known?"目前缺少可核對的用量資料":
   !banked.eligible?"目前無須重置：官方規定適用額度須低於 80% 剩餘":"";
  $("reset-expiry").textContent=(s.armed?"用盡後自動重置\n":"")+
   (active.length?active.map((c,i)=>(i+1)+". 到期 "+fdate(c.expires_at)+" · 剩 "+bankedCountdown(c.expires_at)).join("\n"):
@@ -445,12 +459,12 @@ function renderEvents(){
  summary.className="event-item";
  summary.textContent=feed.latest?
   "最近採樣 "+fdate(feed.latest.at)+" · 5h "+percent(feed.latest.five_hour)+" · 週 "+percent(feed.latest.weekly):
-  "尚無配額採樣";
+  "尚無用量採樣";
  box.append(summary);
  for(const item of feed.recent)append(item);
  if(!feed.recent.length){
   const note=document.createElement("div");note.className="event-item";
-  note.textContent="近 48 小時沒有重大事件或明顯配額變化";
+  note.textContent="近 48 小時沒有重大事件或明顯用量變化";
   box.append(note);
  }
  const toggle=(label:string,active:boolean,callback:()=>void)=>{
@@ -537,7 +551,7 @@ $("reset-action").onclick=()=>{
  const effects="使用後，符合方案範圍的已用額度會補回 100%；尚未使用的剩餘額度不會疊加。" +
   "已是 100% 的額度不會重新開始，其他重置週期與下次自動重置時間可能改變。";
  const reason=!fresh?"目前顯示的是舊資料，請先更新用量。":
-  !eligibility.known?"尚未取得有效配額，請先更新用量。":
+  !eligibility.known?"尚未取得有效用量，請先更新用量。":
   !eligibility.eligible?"目前無須重置：OpenAI 要求至少一項適用額度剩餘低於 80%。Banked Reset 不會因此被扣除。":"符合官方手動重置條件。";
  $("reset-dialog-desc").textContent="每次只使用最早到期的一張 Banked Reset。\n"+
   quotaText+"\n"+effects+"\n"+reason+
@@ -564,7 +578,7 @@ for(const [id,partial] of [["reset-exhausted",false],["reset-now",true]] as cons
   const warning="即將消耗一張 Banked Reset。\n"+
    "目前：5h 尚餘 "+bankedQuotaLabel(status.fiveRemaining)+"、每週尚餘 "+bankedQuotaLabel(status.weeklyRemaining)+"。\n"+
    "未用完的額度不會累加；重置可能使目前週期提前結束，並改變下次自動重置時間。此操作無法復原。\n"+
-   (partial?"確認現在使用？":"確認立即重置已用盡的配額？");
+   (partial?"確認現在使用？":"確認立即重置已用盡的用量？");
   if(!confirm(warning))return;
   try{await call("banked_reset",{allowPartial:partial});($("reset-dialog") as HTMLDialogElement).close();toast("Banked Reset 已執行");await refresh();}
   catch(e){toast("Banked Reset 未完成："+String(e));}
@@ -573,7 +587,7 @@ for(const [id,partial] of [["reset-exhausted",false],["reset-now",true]] as cons
 $("apply-mode").onclick=async()=>{
  if(!snapshot)return;
  const mode=($("mode") as HTMLSelectElement).value as Mode;
- if(mode!=="off"&&!confirm("啟用自動排程後，會依設定自動發送消耗配額的請求。確定啟用？"))return;
+ if(mode!=="off"&&!confirm("啟用自動排程後，會依設定自動發送消耗用量的請求。確定啟用？"))return;
  try{await call("save_settings",{settings:{...snapshot.settings,mode}});toast("排程模式已更新");await load();}
  catch(e){toast(String(e));}
 };
@@ -680,7 +694,7 @@ function configureDayResume(){
   const reserved=snapshot?.projected_busy_until;
   $("day-resume-hint").textContent=(q?.primary_confirmed&&q.five_reset?"目前 5h 視窗結束："+fdate(q.five_reset)+"。":"尚無已確認的 5h 視窗。")+
     (reserved&&reserved*1000>(q?.five_reset?Date.parse(q.five_reset):0)+60000?" 含既有跨日接續，預估占用至 "+fdate(new Date(reserved*1000).toISOString())+"。":"")+
-    (min?" 此日最早 "+min+" 可開始；最多後續 "+max+" 次。實際時間依官方配額重算。":" 該日目前沒有可觸發的時間。");
+    (min?" 此日最早 "+min+" 可開始；最多後續 "+max+" 次。實際時間依官方用量重算。":" 該日目前沒有可觸發的時間。");
 }
 function editDate(key:"weekly"|"today"|"tomorrow"){
  if(!snapshot)return;
@@ -859,7 +873,7 @@ type LocalState={snapshot:Snapshot;history:Sample[];events:Event[]};
 async function initialize(){
 
  // Load persisted samples and events first, independent of OAuth, quota API,
- // or slow startup network operations. Never require "更新配額" to restore history.
+ // or slow startup network operations. Never require "更新用量" to restore history.
  try{
   await loadLocalState();
 
