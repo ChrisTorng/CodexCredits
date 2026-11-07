@@ -265,6 +265,7 @@ public final class LegacyBridge {
                 .put("next_alarm_reason",Scheduler.nextReason(c))
                 .put("next_event_kind",Scheduler.prefs(c).getString("next_event_kind","auto"))
                 .put("next_event_auto_count",Scheduler.prefs(c).getInt("next_event_auto_count",0))
+                .put("projected_busy_until_ms",Scheduler.projectedBusyUntilMs(c))
                 .toString();
         }catch(Exception e){throw new IllegalStateException("Android platform state unavailable",e);}
     }
