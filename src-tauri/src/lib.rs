@@ -649,7 +649,6 @@ async fn run_planned(s:&State,planned:engine::Next){
       e.chain_remaining=pending.auto_count;
       e.chain_reset=if pending.auto_count>0{actual_reset}else{None};
       e.chain_retry_at=None;
-     }
      if pending.from_recovery{
       if let Some(r)=e.recovery.take(){e.recovery_done_anchor=r.anchor_at;}
      }
@@ -703,7 +702,6 @@ async fn run_planned(s:&State,planned:engine::Next){
    }else{replan(s);}
    return;
   }
- }
  let followups=if mode==schedule::Mode::Custom{
   if planned.kind==engine::Kind::Chain{s.engine.lock().unwrap().chain_remaining.saturating_sub(1)}
   else{planned.auto_count}
