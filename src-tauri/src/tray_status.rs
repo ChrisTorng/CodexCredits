@@ -48,7 +48,7 @@ fn readable_reset(s:Option<&str>,now:i64)->String{
  format!("{}天 {:02}:{:02} 後",remaining/86400,(remaining%86400)/3600,(remaining%3600)/60)
 }
 pub fn tooltip(usage:Option<&Usage>,now:i64)->String{
- let Some(v)=usage else{return "Codex Credits · 尚未取得配額".into()};
+ let Some(v)=usage else{return "Codex Credits · 尚未取得用量".into()};
  let pct=|used:Option<f64>|used.map(|n|format!("{:.0}%",(100.-n).clamp(0.,100.))).unwrap_or_else(||"—".into());
  format!("Codex Credits\n5h {} · {}\n1w {} · {}",
   pct(v.five_hour),readable_reset(v.five_reset.as_deref(),now),
