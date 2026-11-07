@@ -181,7 +181,7 @@ pub fn conflict_ids(rules:&[Rule],weekly:bool)->Vec<String>{
  #[test]fn weekly_continuation_only_is_valid_and_anchors_are_excluded(){
    let mut s=Settings::default();s.rules[0].start_kind=StartKind::Resume;
    assert!(s.valid());
-   assert_eq!(s.resume_for_date(Local::now().date_naive()),Some(3));
+   assert_eq!(s.resume_for_date(Local::now().date_naive()),Some(6)); // Per-day horizon; re-arms the next day without a fixed anchor.
    assert!(s.next_slot(Local::now()).is_none());
   }
   #[test]fn topic_validation(){let mut s=Settings::default();s.ntfy_topic="https://ntfy.sh/codex-abc".into();assert!(s.valid());s.ntfy_topic="http://localhost/a".into();assert!(!s.valid());}
