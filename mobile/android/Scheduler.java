@@ -302,7 +302,7 @@ final class Scheduler {
                     .putBoolean(KEY_BANKED_ARMED,true)
                     .putString(KEY_BANKED_ARMED_ID,s.resetCreditId)
                     .commit();
-            note(c,"Banked Reset 已待命：5h 或週配額用盡後自動使用一次");
+            note(c,"Banked Reset 已待命：5h 或週用量用盡後自動使用一次");
             scheduleQuotaSampling(c);
         }
     }
@@ -353,7 +353,7 @@ final class Scheduler {
             if(MODE_AUTO.equals(mode(c)))scheduleAutoFromQuota(c,q);
             else if(MODE_CUSTOM.equals(mode(c)))scheduleNextCustom(c,System.currentTimeMillis()+1_000L);
         }catch(Exception e){
-            if(logEvent)record(c,"更新配額失敗: "+safe(e));
+            if(logEvent)record(c,"更新用量失敗: "+safe(e));
         }
     }
 
@@ -443,7 +443,7 @@ final class Scheduler {
                         (live.secondary!=null&&live.secondary.usedPercent>0.0001);
                 if(!(allowPartial?used:exhausted)){
                     record(c,allowPartial?"Reset 未執行：沒有已使用的額度":
-                            "Reset 未執行：5 小時與週配額都尚未用盡");
+                            "Reset 未執行：5 小時與週用量都尚未用盡");
                     refreshResetCredits(c,cli,true);
                     return false;
                 }
@@ -549,8 +549,8 @@ final class Scheduler {
                 return;
             }
             if(blocked(q)){
-                record(c,"週配額已達限制，本次不觸發");
-                notifyNtfy(c,"Codex 自動觸發略過","週配額目前不可用");
+                record(c,"週用量已達限制，本次不觸發");
+                notifyNtfy(c,"Codex 自動觸發略過","週用量目前不可用");
                 scheduleAutoFromQuota(c,q);
                 return;
             }
@@ -562,7 +562,7 @@ final class Scheduler {
             if(newWindowConfirmed(q,after,requestedAt)){
                 storeQuota(c,after,true);
                 record(c,"已確認自動建立新的 5 小時視窗");
-                notifyNtfy(c,"Codex 5 小時配額已啟動",quotaNotification(after));
+                notifyNtfy(c,"Codex 5 小時用量已啟動",quotaNotification(after));
                 scheduleAutoFromQuota(c,after);
             }else{
                 storeQuota(c,after,false);
@@ -607,7 +607,7 @@ final class Scheduler {
             }
 
             if(blocked(q)){
-                record(c,"錨點到時但週配額不可用，本次略過");
+                record(c,"錨點到時但週用量不可用，本次略過");
                 scheduleNextCustom(c,now+1_000L);
                 return;
             }
@@ -718,7 +718,7 @@ final class Scheduler {
             }
 
             if(blocked(q)){
-                record(c,"自動接續因週配額不可用而停止");
+                record(c,"自動接續因週用量不可用而停止");
                 clearChain(c);
                 scheduleNextCustom(c,now+1_000L);
                 return;
@@ -817,7 +817,7 @@ final class Scheduler {
         if(s.primaryConfirmed && s.primaryResetMs>now){
             scheduleEvent(c,s.primaryResetMs+RESET_GRACE_MS,"5 小時視窗重置後",EVENT_AUTO,0);
         }else if(s.secondaryActive && s.secondaryUsed>=100.0 && s.secondaryResetMs>now){
-            scheduleEvent(c,s.secondaryResetMs+RESET_GRACE_MS,"週配額重置後",EVENT_AUTO,0);
+            scheduleEvent(c,s.secondaryResetMs+RESET_GRACE_MS,"週用量重置後",EVENT_AUTO,0);
         }else{
             scheduleEvent(c,now+60_000L,"檢查並視需要觸發",EVENT_AUTO,0);
         }
@@ -829,7 +829,7 @@ final class Scheduler {
         if(s.primaryConfirmed && s.primaryResetMs>now){
             scheduleEvent(c,s.primaryResetMs+RESET_GRACE_MS,"5 小時視窗重置後",EVENT_AUTO,0);
         }else if(q.secondary!=null&&q.secondary.usedPercent>=100.0&&q.secondary.resetAt>0){
-            scheduleEvent(c,q.secondary.resetAt*1000L+RESET_GRACE_MS,"週配額重置後",EVENT_AUTO,0);
+            scheduleEvent(c,q.secondary.resetAt*1000L+RESET_GRACE_MS,"週用量重置後",EVENT_AUTO,0);
         }else{
             // No confirmed 5h window. A zero-usage primary_window may merely be a
             // sliding now+5h placeholder, so don't wait for that synthetic reset.
@@ -936,7 +936,7 @@ final class Scheduler {
             }
             if(blocked(quota)){
                 clearRecovery(c);
-                record(c,"補接續因官方配額不可用而停止");
+                record(c,"補接續因官方用量不可用而停止");
                 scheduleNextCustom(c,now+1_000L);
                 return;
             }
@@ -1100,7 +1100,7 @@ final class Scheduler {
                 return;
             }
             if(blocked(before)){
-                record(c,"首次接續因週配額限制，15 分鐘後確認");
+                record(c,"首次接續因週用量限制，15 分鐘後確認");
                 delayResume(c,date,count,now+15*60_000L,0);
                 return;
             }
@@ -1415,7 +1415,7 @@ final class Scheduler {
             if(MODE_AUTO.equals(mode(c)))scheduleAutoFromQuota(c,q);
             else if(MODE_CUSTOM.equals(mode(c)))scheduleNextCustom(c,System.currentTimeMillis()+1_000L);
         }catch(Exception e){
-            note(c,"配額採樣失敗: "+safe(e));
+            note(c,"用量採樣失敗: "+safe(e));
         }finally{
             scheduleQuotaSampling(c);
         }
@@ -1437,8 +1437,8 @@ final class Scheduler {
         String p=q.primary==null?"5 小時：未啟動":
                 String.format(Locale.TAIWAN,"5 小時剩餘 %.0f%%，重置 %s",
                         Math.max(0,100-q.primary.usedPercent),formatTime(q.primary.resetAt*1000L));
-        String w=q.secondary==null?"週配額：無資料":
-                String.format(Locale.TAIWAN,"週配額剩餘 %.0f%%，重置 %s",
+        String w=q.secondary==null?"週用量：無資料":
+                String.format(Locale.TAIWAN,"週用量剩餘 %.0f%%，重置 %s",
                         Math.max(0,100-q.secondary.usedPercent),formatTime(q.secondary.resetAt*1000L));
         return p+"\n"+w;
     }
