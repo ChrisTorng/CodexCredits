@@ -31,6 +31,7 @@ pub struct Engine {
  pub next:Option<Next>,
  pub chain_remaining:u8,
  pub chain_reset:Option<i64>,
+ pub chain_retry_at:Option<i64>,
  pub recovery:Option<Recovery>,
  pub recovery_done_anchor:i64,
  pub pending:Option<PendingVerification>,
@@ -124,13 +125,18 @@ pub fn next_event(settings:&Settings,usage:Option<&Usage>,engine:&Engine,now:i64
    Some(Next{at,kind:Kind::Auto,auto_count:0,reason:reason.into()})
   },
   Mode::Custom=>{
+    // Do not post again while the previous request awaits official confirmation.
+    if let Some(v)=engine.pending{
+     return Some(Next{at:v.at.max(now+1),kind:Kind::Verify,auto_count:v.auto_count,
+      reason:"確認先前 Codex 請求是否已啟動 5h".into()});
+    }
    let candidate=DateTime::<Utc>::from_timestamp(now,0)?.with_timezone(&Local);
    let anchor=settings.next_slot(candidate).map(|(t,count)|Next{
     at:t.timestamp(),kind:Kind::Anchor,auto_count:count,reason:format!("錨點，後續自動 {count} 次")
    });
    let chain=if engine.chain_remaining>0 {
     engine.chain_reset.map(|reset|Next{
-     at:(reset+RESET_GRACE_SEC).max(now+1),kind:Kind::Chain,auto_count:0,
+     at:(reset+RESET_GRACE_SEC).max(now+1).max(engine.chain_retry_at.unwrap_or(0)),kind:Kind::Chain,auto_count:0,
      reason:format!("自動接續，尚餘 {} 次",engine.chain_remaining)
     })
    }else{None};
@@ -140,11 +146,7 @@ pub fn next_event(settings:&Settings,usage:Option<&Usage>,engine:&Engine,now:i64
     at:r.at.max(now+1),kind:Kind::Recovery,auto_count:r.auto_count,
     reason:format!("錨點錯過 · 補接續，後續自動 {} 次",r.auto_count)
    });
-   let verify=engine.pending.map(|v|Next{
-    at:v.at.max(now+1),kind:Kind::Verify,auto_count:v.auto_count,
-    reason:"確認先前 Codex 請求是否已啟動 5h".into()
-   });
-   [anchor,chain,recovery,next_day_resume(settings,usage,engine,now),verify].into_iter().flatten().min_by_key(|v|v.at)
+    [anchor,chain,recovery,next_day_resume(settings,usage,engine,now)].into_iter().flatten().min_by_key(|v|v.at)
   }
  }
 }
@@ -254,6 +256,23 @@ pub fn is_stale(now:i64,at:i64)->bool{now-at>90}
    assert_eq!(next.at,tomorrow_reset+RESET_GRACE_SEC);
    assert_eq!(next.kind,Kind::Resume);
   }
+   #[test]fn pending_verification_beats_due_chain(){
+    let mut s=Settings::default();s.mode=Mode::Custom;
+    let now=Utc::now().timestamp();
+    let e=Engine{chain_remaining:2,chain_reset:Some(now-30),
+     pending:Some(PendingVerification{at:now+150,expected_reset:now+5*3600,
+      auto_count:1,from_recovery:false,resume_date:None}),..Default::default()};
+    let n=next_event(&s,None,&e,now).unwrap();
+    assert_eq!(n.kind,Kind::Verify);assert_eq!(n.at,now+150);
+   }
+   #[test]fn chain_retry_is_rate_limited(){
+    let mut s=Settings::default();s.mode=Mode::Custom;s.rules.clear();
+    let now=Utc::now().timestamp();
+    let e=Engine{chain_remaining:1,chain_reset:Some(now-30),
+     chain_retry_at:Some(now+900),..Default::default()};
+    let n=next_event(&s,None,&e,now).unwrap();
+    assert_eq!(n.kind,Kind::Chain);assert_eq!(n.at,now+900);
+   }
   #[test]fn tomorrow_resume_waits_for_todays_chain_across_midnight(){
     let mut s=Settings::default();s.mode=Mode::Custom;s.rules.clear();
     let today=Local::now().date_naive();
