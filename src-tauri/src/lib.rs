@@ -867,11 +867,15 @@ pub fn run(){
   }
   #[cfg(target_os="windows")]
   {
+   // Shell notifications can stall Explorer; never run them on the UI thread.
    let key=concat!("icon_cache_refreshed_",env!("CARGO_PKG_VERSION"));
-   let db=state.db.lock().unwrap();
-   if storage::get_meta(&db,key).is_none(){
-    refresh_windows_icon_cache();
-    let _=storage::set_meta(&db,key,Some("1"));
+   let needs=storage::get_meta(&state.db.lock().unwrap(),key).is_none();
+   if needs{
+    let background_state=Arc::clone(&state);
+    std::thread::spawn(move ||{
+     refresh_windows_icon_cache();
+     let _=storage::set_meta(&background_state.db.lock().unwrap(),key,Some("1"));
+    });
    }
   }
   TrayIconBuilder::with_id("quota").icon(tray_status::icon(None,now())).tooltip("Codex Credits · 正在取得用量").show_menu_on_left_click(false).menu(&menu)
