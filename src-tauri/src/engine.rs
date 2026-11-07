@@ -1,6 +1,6 @@
 //! In-process scheduler. Unlike Android AlarmManager it cannot run when the
 //! desktop process is stopped; stale events (>90s) are skipped on resume.
-use chrono::{DateTime,Local,Utc};
+use chrono::{DateTime,Duration,Local,NaiveDate,Utc};
 use serde::{Serialize,Deserialize};
 use crate::{api::Usage,schedule::{Mode,Settings,MissedAnchorPolicy}};
 const RESET_GRACE_SEC:i64=15;
@@ -8,7 +8,7 @@ const TOLERANCE_SEC:i64=60;
 
 #[derive(Debug,Clone,Copy,PartialEq,Eq,Serialize)]
 #[serde(rename_all="snake_case")]
-pub enum Kind{Auto,Anchor,AnchorRetry,Chain,Recovery,Verify}
+pub enum Kind{Auto,Anchor,AnchorRetry,Chain,Recovery,Resume,Verify}
 #[derive(Debug,Clone,Serialize)]
 pub struct Next {
  pub at:i64,
@@ -24,6 +24,7 @@ pub struct PendingVerification{
  pub expected_reset:i64,
  pub auto_count:u8,
  pub from_recovery:bool,
+ #[serde(default)]pub resume_date:Option<NaiveDate>,
 }
 #[derive(Debug,Default)]
 pub struct Engine {
@@ -33,6 +34,8 @@ pub struct Engine {
  pub recovery:Option<Recovery>,
  pub recovery_done_anchor:i64,
  pub pending:Option<PendingVerification>,
+ pub resume_done_date:Option<NaiveDate>,
+ pub resume_retry_at:Option<i64>,
 }
 pub fn reset_timestamp(iso:Option<&String>)->Option<i64>{
  iso.and_then(|s|DateTime::parse_from_rfc3339(s).ok()).map(|t|t.timestamp())
@@ -52,6 +55,38 @@ pub fn can_trigger(usage:&Usage,now:i64)->Result<(),String>{
  if blocked(usage){return Err("週配額不可用或已達限制".into());}
  if confirmed(usage,now){return Err("5 小時視窗仍有效，請等待重置後再觸發".into());}
  Ok(())
+}
+/// One-shot day override: continue at the *actual* confirmed reset, never at a
+/// guessed fixed anchor. If no window is running, it becomes eligible now (or
+/// at the start of the selected future date). An entry is consumed once.
+pub fn next_day_resume(settings:&Settings,usage:Option<&Usage>,engine:&Engine,now:i64)->Option<Next>{
+ let local=DateTime::<Utc>::from_timestamp(now,0)?.with_timezone(&Local);
+ for offset in 0..=7{
+  let date=local.date_naive()+Duration::days(offset);
+  let ov=match settings.overrides.get(&date.to_string()){
+   Some(o) if o.enabled && o.resume_auto_count.is_some()=>o,
+   _=>continue,
+  };
+  if engine.resume_done_date.is_some_and(|done|done>=date)
+    || engine.pending.as_ref().is_some_and(|p|p.resume_date==Some(date)){continue;}
+  let start=date.and_hms_opt(0,0,0)?.and_local_timezone(Local).earliest()?.timestamp();
+  let end=(date+Duration::days(1)).and_hms_opt(0,0,0)?
+   .and_local_timezone(Local).earliest()?.timestamp();
+  let reset=usage.filter(|u|confirmed(u,now))
+   .and_then(|u|reset_timestamp(u.five_reset.as_ref())).unwrap_or(0);
+  let mut at=now.max(start).max(reset)+RESET_GRACE_SEC;
+  if offset==0{at=at.max(engine.resume_retry_at.unwrap_or(0));}
+  if at>=end{continue;}
+  let next_local=DateTime::<Utc>::from_timestamp(at-1,0)?.with_timezone(&Local);
+  let next_anchor=settings.next_slot(next_local).map(|(t,_)|t.timestamp());
+  let boundary=next_anchor.unwrap_or(end).min(end);
+  // Reserve the entire five-hour window, without crossing into the next day.
+  let possible=((boundary-at-1).max(0)/(5*3600)).min(6) as u8;
+  let count=ov.resume_auto_count.unwrap_or(0).min(possible);
+  return Some(Next{at,kind:Kind::Resume,auto_count:count,
+   reason:format!("{}首次接續，後續自動 {} 次",date,count)});
+ }
+ None
 }
 pub fn next_event(settings:&Settings,usage:Option<&Usage>,engine:&Engine,now:i64)->Option<Next>{
  match settings.mode{
@@ -90,7 +125,7 @@ pub fn next_event(settings:&Settings,usage:Option<&Usage>,engine:&Engine,now:i64
     at:v.at.max(now+1),kind:Kind::Verify,auto_count:v.auto_count,
     reason:"確認先前 Codex 請求是否已啟動 5h".into()
    });
-   [anchor,chain,recovery,verify].into_iter().flatten().min_by_key(|v|v.at)
+   [anchor,chain,recovery,next_day_resume(settings,usage,engine,now),verify].into_iter().flatten().min_by_key(|v|v.at)
   }
  }
 }
@@ -145,7 +180,7 @@ pub fn is_stale(now:i64,at:i64)->bool{now-at>90}
   let e=Engine{recovery:Some(r),..Default::default()};
   assert_eq!(next_event(&s,Some(&q),&e,now).unwrap().kind,Kind::Recovery);
   let mut verifying=e;
-  verifying.pending=Some(PendingVerification{at:now+120,expected_reset:reset,auto_count:2,from_recovery:true});
+  verifying.pending=Some(PendingVerification{at:now+120,expected_reset:reset,auto_count:2,from_recovery:true,resume_date:None});
   assert_eq!(next_event(&s,Some(&q),&verifying,now).unwrap().kind,Kind::Verify);
   // A five-hour window started just ten seconds before 06:00 still
   // prevents the anchor and must recover today (not tomorrow).
@@ -170,4 +205,31 @@ pub fn is_stale(now:i64,at:i64)->bool{now-at>90}
   let u=Usage{allowed:true,weekly:Some(100.),weekly_reset:Some(DateTime::<Utc>::from_timestamp(now-100,0).unwrap().to_rfc3339()),..Usage::default()};
   assert_eq!(next_event(&s,Some(&u),&Engine::default(),now).unwrap().at,now+900);
  }
+  #[test]fn day_resume_follows_real_reset_and_respects_remaining_slots(){
+   let mut s=Settings::default();s.mode=Mode::Custom;
+   let date=Local::now().date_naive();
+   s.overrides.insert(date.to_string(),crate::schedule::Override{
+    enabled:true,rules:vec![],resume_auto_count:Some(6)});
+   let start=date.and_hms_opt(0,0,0).unwrap().and_local_timezone(Local).earliest().unwrap().timestamp();
+   let now=start+7*3600;
+   let reset=start+10*3600;
+   let q=Usage{primary_confirmed:true,five_reset:Some(DateTime::<Utc>::from_timestamp(reset,0).unwrap().to_rfc3339()),..Default::default()};
+   let engine=Engine::default();
+   let next=next_day_resume(&s,Some(&q),&engine,now).unwrap();
+   assert_eq!(next.at,reset+15);
+   assert_eq!(next.kind,Kind::Resume);
+   assert_eq!(next.auto_count,2);
+   let done=Engine{resume_done_date:Some(date),..Default::default()};
+   assert!(next_day_resume(&s,Some(&q),&done,now).is_none());
+  }
+  #[test]fn day_resume_without_active_window_starts_at_earliest_time(){
+   let mut s=Settings::default();s.mode=Mode::Custom;
+   let date=Local::now().date_naive();
+   s.overrides.insert(date.to_string(),crate::schedule::Override{
+    enabled:true,rules:vec![],resume_auto_count:Some(0)});
+   let now=date.and_hms_opt(12,0,0).unwrap().and_local_timezone(Local).earliest().unwrap().timestamp();
+   let next=next_day_resume(&s,None,&Engine::default(),now).unwrap();
+   assert_eq!(next.at,now+15);
+  }
+
 }
