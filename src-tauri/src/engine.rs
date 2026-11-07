@@ -63,10 +63,7 @@ pub fn next_day_resume(settings:&Settings,usage:Option<&Usage>,engine:&Engine,no
  let local=DateTime::<Utc>::from_timestamp(now,0)?.with_timezone(&Local);
  for offset in 0..=7{
   let date=local.date_naive()+Duration::days(offset);
-  let ov=match settings.overrides.get(&date.to_string()){
-   Some(o) if o.enabled && o.resume_auto_count.is_some()=>o,
-   _=>continue,
-  };
+  let Some(configured_count)=settings.resume_for_date(date)else{continue};
   if engine.resume_done_date.is_some_and(|done|done>=date)
     || engine.pending.as_ref().is_some_and(|p|p.resume_date==Some(date)){continue;}
   let start=date.and_hms_opt(0,0,0)?.and_local_timezone(Local).earliest()?.timestamp();
@@ -79,10 +76,16 @@ pub fn next_day_resume(settings:&Settings,usage:Option<&Usage>,engine:&Engine,no
   if at>=end{continue;}
   let next_local=DateTime::<Utc>::from_timestamp(at-1,0)?.with_timezone(&Local);
   let next_anchor=settings.next_slot(next_local).map(|(t,_)|t.timestamp());
-  let boundary=next_anchor.unwrap_or(end).min(end);
-  // Reserve the entire five-hour window, without crossing into the next day.
-  let possible=((boundary-at-1).max(0)/(5*3600)).min(6) as u8;
-  let count=ov.resume_auto_count.unwrap_or(0).min(possible);
+  // Do not create a reset-based window that would block the next fixed
+  // anchor. Day-limited continuation starts may end after midnight.
+  let next_fixed=next_anchor.unwrap_or(i64::MAX);
+  if at+5*3600>next_fixed.saturating_add(TOLERANCE_SEC){continue;}
+  let weekly_continuous=!settings.overrides.get(&date.to_string())
+   .is_some_and(|o|o.enabled && o.resume_auto_count.is_some());
+  let latest_start=if weekly_continuous{end-1}else{at+6*5*3600};
+  let min_latest=latest_start.min(next_fixed.saturating_sub(5*3600));
+  let possible=((min_latest-at).max(0)/(5*3600)).min(6) as u8;
+  let count=configured_count.min(possible);
   return Some(Next{at,kind:Kind::Resume,auto_count:count,
    reason:format!("{}首次接續，後續自動 {} 次",date,count)});
  }
@@ -218,7 +221,7 @@ pub fn is_stale(now:i64,at:i64)->bool{now-at>90}
    let next=next_day_resume(&s,Some(&q),&engine,now).unwrap();
    assert_eq!(next.at,reset+15);
    assert_eq!(next.kind,Kind::Resume);
-   assert_eq!(next.auto_count,2);
+   assert_eq!(next.auto_count,6); // Day override permits continuations past midnight until a later anchor
    let done=Engine{resume_done_date:Some(date),..Default::default()};
    assert!(next_day_resume(&s,Some(&q),&done,now).is_none());
   }
