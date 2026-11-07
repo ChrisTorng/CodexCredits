@@ -646,7 +646,10 @@ async fn run_planned(s:&State,planned:engine::Next){
   let remaining=engine::reset_timestamp(quota.five_reset.as_ref()).unwrap_or(now())-now();
   if remaining>=0&&remaining<=60{
    s.engine.lock().unwrap().next=Some(engine::Next{
-    at:now()+remaining+15,kind:engine::Kind::AnchorRetry,auto_count:planned.auto_count,
+    at:now()+remaining+15,
+     kind:if matches!(planned.kind,engine::Kind::Anchor|engine::Kind::AnchorRetry)
+      {engine::Kind::AnchorRetry}else{planned.kind},
+     auto_count:planned.auto_count,
     reason:"等候 5 小時重置".into()});
    return;
   }
