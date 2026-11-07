@@ -9,7 +9,7 @@ mod banked_reminder;
 #[cfg(target_os="android")] mod android_bridge;
 #[cfg(target_os="android")] mod legacy;
 
-use std::{sync::{Arc,Mutex},time::Duration};
+use std::{sync::{Arc,Mutex,atomic::{AtomicBool,Ordering}},time::Duration};
 use serde::Serialize;
 use tauri_plugin_notification::NotificationExt;
 use tauri::{AppHandle,Emitter,Manager,WindowEvent};
@@ -28,6 +28,8 @@ struct State{
  ntfy_status:Mutex<String>,
  armed:Mutex<Option<String>>,
  engine:Mutex<engine::Engine>,
+ signed_in:AtomicBool,
+ auth_checked:AtomicBool,
  error:Mutex<Option<String>>,
  updating:tokio::sync::Mutex<()>,
  action:tokio::sync::Mutex<()>,
@@ -51,6 +53,7 @@ struct Snapshot{
  projected_busy_until:Option<i64>,
  error:Option<String>,
  signed_in:bool,
+ auth_checked:bool,
 }
 #[cfg(target_os="windows")]
 fn refresh_windows_icon_cache(){
@@ -105,13 +108,15 @@ fn snapshot(s:&State)->Snapshot{
    {android_bridge::platform_status().ok().and_then(|v|v["projected_busy_until_ms"].as_i64()).filter(|v|*v>0).map(|v|v/1000)}
    #[cfg(not(target_os="android"))]
    {
-    let e=s.engine.lock().unwrap();
-    let u=s.usage.lock().unwrap();
-    engine::projected_busy_until(u.as_ref(),&e,now())
+    // Avoid nested engine/usage locks while the UI waits for a snapshot.
+     let u=s.usage.lock().unwrap().clone();
+     let e=s.engine.lock().unwrap();
+     engine::projected_busy_until(u.as_ref(),&e,now())
    }
   },
   error:s.error.lock().unwrap().clone(),
-  signed_in:token().is_ok(),
+  signed_in:s.signed_in.load(Ordering::Relaxed),
+  auth_checked:s.auth_checked.load(Ordering::Relaxed),
  }
 }
 fn record(s:&State,kind:&str,message:&str){
@@ -461,7 +466,9 @@ async fn consume(s:&State,allow_partial:bool,selected:Option<String>)->Result<()
 #[tauri::command]fn get_snapshot(s:tauri::State<'_,Arc<State>>)->Snapshot{snapshot(&s)}
 #[tauri::command]fn save_settings(s:tauri::State<'_,Arc<State>>,settings:schedule::Settings)->Result<Snapshot,String>{
  if !settings.valid(){return Err("設定不正確：請檢查排程、ntfy 網址與採樣間隔".into())}
- if settings.mode!=schedule::Mode::Off&&token().is_err(){return Err("請先登入才能啟用自動排程".into())}
+ if settings.mode!=schedule::Mode::Off&&!s.signed_in.load(Ordering::Relaxed){
+   return Err("請先登入才能啟用自動排程".into())
+  }
  {
   let db=s.db.lock().unwrap();storage::save_settings(&db,&settings)?;
  }
@@ -487,6 +494,8 @@ async fn consume(s:&State,allow_partial:bool,selected:Option<String>)->Result<()
  let _busy=s.login_busy.try_lock().map_err(|_|"登入程序已進行中")?;
  let session=oauth::browser_login().await?;
  {let _guard=s.updating.lock().await;oauth::save_session(&session)?;}
+ s.signed_in.store(true,Ordering::Relaxed);
+ s.auth_checked.store(true,Ordering::Relaxed);
  *s.error.lock().unwrap()=None;
  record(&s,"login","ChatGPT 登入成功");
  let _=app.emit("credits:updated",());Ok(snapshot(&s))
@@ -494,6 +503,8 @@ async fn consume(s:&State,allow_partial:bool,selected:Option<String>)->Result<()
 #[tauri::command]async fn sign_out(s:tauri::State<'_,Arc<State>>)->Result<Snapshot,String>{
  let _guard=s.updating.lock().await;
  credentials::sign_out()?;
+ s.signed_in.store(false,Ordering::Relaxed);
+ s.auth_checked.store(true,Ordering::Relaxed);
  #[cfg(target_os="android")]
  android_bridge::clear_auth()?;
  *s.usage.lock().unwrap()=None;*s.credits.lock().unwrap()=None;
@@ -831,7 +842,8 @@ pub fn run(){
    app:handle.clone(),db:Mutex::new(db),settings:Mutex::new(settings),usage:Mutex::new(cached_usage),
    credits:Mutex::new(cached_credits),global:Mutex::new(cached_global),last_credits:Mutex::new(0),last_global:Mutex::new(0),
    ntfy_status:Mutex::new("尚未測試".into()),armed:Mutex::new(armed),
-   engine:Mutex::new(engine::Engine{recovery,recovery_done_anchor:recovery_done,pending,resume_done_date:resume_done,chain_remaining,chain_reset,chain_retry_at,..Default::default()}),error:Mutex::new({
+   engine:Mutex::new(engine::Engine{recovery,recovery_done_anchor:recovery_done,pending,resume_done_date:resume_done,chain_remaining,chain_reset,chain_retry_at,..Default::default()}),
+    signed_in:AtomicBool::new(false),auth_checked:AtomicBool::new(false),error:Mutex::new({
     #[cfg(target_os="android")] {migration_error}
     #[cfg(not(target_os="android"))] {None}
    }),
@@ -862,7 +874,7 @@ pub fn run(){
     let _=storage::set_meta(&db,key,Some("1"));
    }
   }
-  TrayIconBuilder::with_id("quota").icon(tray_status::icon(None,now())).tooltip("Codex Credits · 正在取得配額").show_menu_on_left_click(false).menu(&menu)
+  TrayIconBuilder::with_id("quota").icon(tray_status::icon(None,now())).tooltip("Codex Credits · 正在取得用量").show_menu_on_left_click(false).menu(&menu)
    .on_tray_icon_event(|tray,event|{
      if let TrayIconEvent::DoubleClick{button:MouseButton::Left,..}=event{
        if let Some(window)=tray.app_handle().get_webview_window("main"){
