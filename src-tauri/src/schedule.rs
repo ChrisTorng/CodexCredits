@@ -21,7 +21,7 @@ impl Default for Rule {
 }
 impl Rule{pub fn valid(&self)->bool{self.hour<24&&self.minute<60&&self.auto_count<=6}}
 #[derive(Debug,Clone,Serialize,Deserialize,Default)]
-pub struct Override{pub enabled:bool,pub rules:Vec<Rule>}
+pub struct Override{pub enabled:bool,pub rules:Vec<Rule>,#[serde(default)]pub resume_auto_count:Option<u8>}
 fn default_retention()->i64{8}
 fn default_sampling()->u64{10}
 fn default_theme()->String{"system".into()}
@@ -49,7 +49,7 @@ impl Settings{
   && conflict_ids(&self.rules,true).is_empty()
   && self.overrides.len()<=32
   && self.overrides.iter().all(|(date,ov)|NaiveDate::parse_from_str(date,"%Y-%m-%d").is_ok()
-      &&ov.rules.len()<=100 &&ov.rules.iter().all(Rule::valid) &&(!ov.enabled||conflict_ids(&ov.rules,false).is_empty()))
+      &&ov.resume_auto_count.is_none_or(|n|n<=6) &&ov.rules.len()<=100 &&ov.rules.iter().all(Rule::valid) &&(!ov.enabled||conflict_ids(&ov.rules,false).is_empty()))
   &&["system","light","dark"].contains(&self.theme.as_str())
   && (self.ntfy_topic.is_empty() || ntfy_valid(&self.ntfy_topic))
  }
@@ -145,7 +145,7 @@ pub fn conflict_ids(rules:&[Rule],weekly:bool)->Vec<String>{
  }
  #[test]fn daily_three(){let r=Rule::default();assert_eq!(safe_followups(&r,&[r.clone()]),3);}
  #[test]fn next_anchor_future(){let s=Settings::default();assert!(s.next_slot(Local::now()).unwrap().0>Local::now());}
- #[test]fn overrides_suppress_defaults(){let mut s=Settings::default();let day=Local::now().date_naive();s.overrides.insert(day.to_string(),Override{enabled:true,rules:vec![]});assert!(s.rules_for_date(day).is_empty());}
+ #[test]fn overrides_suppress_defaults(){let mut s=Settings::default();let day=Local::now().date_naive();s.overrides.insert(day.to_string(),Override{enabled:true,rules:vec![],resume_auto_count:None});assert!(s.rules_for_date(day).is_empty());}
  #[test]fn overlapping_anchors_rejected(){
   let mut s=Settings::default();
   let mut duplicate=Rule::default();duplicate.id="overlap".into();duplicate.hour=7;
