@@ -21,7 +21,7 @@ type Override={enabled:boolean;rules:Rule[];resume_auto_count?:number|null};
 type Settings={mode:Mode;missed_anchor_policy:MissedPolicy;sampling_minutes:number;retention_days:number;rules:Rule[];overrides:Record<string,Override>;ntfy_topic:string;theme:string;native_notify_enabled:boolean};
 type Usage={five_hour:number|null;weekly:number|null;five_reset:string|null;weekly_reset:string|null;primary_confirmed:boolean;plan:string;allowed:boolean;limit_reached:boolean;checked_at:string};
 type Credit={id:string;title:string;description:string;expires_at:string};
-type Snapshot={settings:Settings;usage:Usage|null;credits:{count:number;available:Credit[]}|null;global:{last_reset_at:string|null;age_days:number|null;p24:number|null;p48:number|null;avg_days:number|null;median_days:number|null;median_estimate_at:string|null}|null;armed:boolean;ntfy_status:string;next:{at:number;kind:string;reason:string;auto_count:number}|null;error:string|null;signed_in:boolean};
+type Snapshot={settings:Settings;usage:Usage|null;credits:{count:number;available:Credit[]}|null;global:{last_reset_at:string|null;age_days:number|null;p24:number|null;p48:number|null;avg_days:number|null;median_days:number|null;median_estimate_at:string|null}|null;armed:boolean;ntfy_status:string;next:{at:number;kind:string;reason:string;auto_count:number}|null;projected_busy_until?:number|null;error:string|null;signed_in:boolean};
 type Sample={at:string;five_hour:number|null;weekly:number|null;five_reset:string|null;weekly_reset:string|null};
 type Event={at:string;kind:string;detail:string};
 const $=(id:string)=>document.getElementById(id)!;
@@ -405,7 +405,8 @@ function render(){
  $("schedule-preview").textContent=mode==="off"?"排程已關閉":mode==="auto"?"下一次以目前 quota reset 為基準":
   s.next?.kind==="recovery"?"今日補接續："+fdate(new Date(s.next.at*1000).toISOString())+" · 後續自動 "+s.next.auto_count+" 次":
   s.next?.kind==="chain"?"依實際重置時間接續："+fdate(new Date(s.next.at*1000).toISOString()):
-  "下一錨點："+(s.next?fdate(new Date(s.next.at*1000).toISOString()):"尚未排程");
+   s.next?.kind==="resume"?"首次接續："+fdate(new Date(s.next.at*1000).toISOString())+" · 後續 "+s.next.auto_count+" 次":
+   "下一錨點："+(s.next?fdate(new Date(s.next.at*1000).toISOString()):"尚未排程");
  $("weekly-summary").textContent=s.settings.rules.filter(r=>r.enabled).map(r=>ruleLabel(r,true)).join("\n")||"沒有錨點";
  for(const [key,date,output] of [["today",today(0),"today-summary"],["tomorrow",today(1),"tomorrow-summary"]] as const){
   const over=s.settings.overrides[date];
@@ -634,7 +635,8 @@ function minAllowedTime(date:string){
  const end=new Date(date+"T00:00:00");end.setDate(end.getDate()+1);
  const q=snapshot?.usage;
  const reset=q?.primary_confirmed&&q.five_reset?Date.parse(q.five_reset):0;
- const earliest=Math.max(begin,Date.now()+1000,Number.isFinite(reset)?reset+15000:0);
+  const reserved=(snapshot?.projected_busy_until??0)*1000;
+  const earliest=Math.max(begin,Date.now()+1000,Number.isFinite(reset)?reset+15000:0,reserved>0?reserved+15000:0);
  if(earliest>=end.getTime())return "";
  return new Date(Math.ceil(earliest/60000)*60000).toTimeString().slice(0,5);
 }
@@ -644,9 +646,7 @@ function maxResumeCount(date:string,at:number){
  for(let offset=0;offset<=8;offset++){
   const d=new Date(first);d.setDate(first.getDate()+offset);
   const dateKey=[d.getFullYear(),String(d.getMonth()+1).padStart(2,"0"),String(d.getDate()).padStart(2,"0")].join("-");
-  for(const rule of allRules(dateKey)){
-   // Editing a day override replaces its inherited weekly anchors entirely.
-   if(dateKey===date&&editing!=="weekly")continue;
+   for(const rule of dateKey===date&&editing!=="weekly"?draft:allRules(dateKey)){
    if(rule.start_kind==="resume")continue;
    const trigger=new Date(d);trigger.setHours(rule.hour,rule.minute,0,0);
    if(trigger.getTime()>at)next=Math.min(next,trigger.getTime());
@@ -667,8 +667,10 @@ function configureDayResume(){
  count.disabled=resumeAutoCount===null||!min;
  check.disabled=!min;
  const q=snapshot?.usage;
- $("day-resume-hint").textContent=(q?.primary_confirmed&&q.five_reset?"目前 5h 視窗："+fdate(q.five_reset)+" 才結束。":"目前沒有已確認的 5h 視窗：依當日可用時間啟動。")+
-   (min?" 預估最多可再接續 "+max+" 次（含跨日）；執行時重新依最新配額調整。":" 目前該日沒有可觸發的起始時間。");
+  const reserved=snapshot?.projected_busy_until;
+  $("day-resume-hint").textContent=(q?.primary_confirmed&&q.five_reset?"目前 5h 視窗結束："+fdate(q.five_reset)+"。":"尚無已確認的 5h 視窗。")+
+    (reserved&&reserved*1000>(q?.five_reset?Date.parse(q.five_reset):0)+60000?" 含既有跨日接續，預估占用至 "+fdate(new Date(reserved*1000).toISOString())+"。":"")+
+    (min?" 此日最早 "+min+" 可開始；最多後續 "+max+" 次。實際時間依官方配額重算。":" 該日目前沒有可觸發的時間。");
 }
 function editDate(key:"weekly"|"today"|"tomorrow"){
  if(!snapshot)return;
@@ -692,7 +694,7 @@ $("rule-cancel").onclick=()=>($("rule-dialog") as HTMLDialogElement).close();
 $("override-checkbox").onchange=()=>{overrideOn=($("override-checkbox") as HTMLInputElement).checked;drawRuleEditor();};
 $("day-resume").onchange=()=>{
  resumeAutoCount=($("day-resume") as HTMLInputElement).checked?0:null;
- if(resumeAutoCount!==null)draft=[];
+
  drawRuleEditor();
 };
 $("day-resume-count").onchange=()=>{resumeAutoCount=Number(($("day-resume-count") as HTMLSelectElement).value);drawRuleEditor();};
@@ -728,7 +730,7 @@ function drawRuleEditor(){
  const weekly=editing==="weekly";
  list.classList.toggle("disabled-rules",!weekly&&!overrideOn);
  for(const rule of draft){
-  const card=document.createElement("div");card.className="rule-card";card.hidden=!weekly&&resumeAutoCount!==null;
+  const card=document.createElement("div");card.className="rule-card";
   const top=document.createElement("div");top.className="rule-top";
   const enabled=document.createElement("label");enabled.className="check";
   const checkbox=document.createElement("input");checkbox.type="checkbox";checkbox.checked=rule.enabled;
@@ -771,7 +773,7 @@ function drawRuleEditor(){
   card.append(preview);list.append(card);
  }
  if(!draft.length&&resumeAutoCount===null){const p=document.createElement("p");p.className="note";p.textContent="沒有錨點。";list.append(p);}
- ($("rule-add") as HTMLButtonElement).disabled=!weekly&&(!overrideOn||resumeAutoCount!==null);
+ ($("rule-add") as HTMLButtonElement).disabled=!weekly&&!overrideOn;
 }
 $("rule-add").onclick=()=>{
  const base=draft.at(-1),baseMinute=base?base.hour*60+base.minute+300:360;
@@ -796,17 +798,28 @@ $("rule-recommended").onclick=()=>{draft=[{id:crypto.randomUUID(),enabled:true,d
 $("rule-save").onclick=async()=>{
  if(!snapshot)return;
  const weekly=editing==="weekly";
- const rules=(!weekly&&resumeAutoCount!==null?[]:draft.map(cloned));
+  const rules=draft.map(cloned);
  if(rules.some(r=>!r.enabled?false:r.auto_count>maxSafe(r,rules,weekly))){
   toast("存在小於 5 小時的錨點衝突，請修正");return;
  }
- if(!weekly&&overrideOn){
-  const date=today(editing==="today"?0:1),min=minAllowedTime(date);
-  if((!min&&(resumeAutoCount!==null||rules.some(r=>r.enabled))) || (min&&resumeAutoCount===null&&rules.some(r=>r.enabled&&hhmm(r)<min))){
-   toast("此日期的第一項不可早於目前 5h 視窗結束時間；請修改或改選接續。");return;
+  if(!weekly&&overrideOn){
+   const date=today(editing==="today"?0:1),min=minAllowedTime(date);
+   const active=rules.filter(r=>r.enabled&&r.start_kind!=="resume");
+   if((!min&&(resumeAutoCount!==null||active.length>0)) || (min&&active.some(r=>hhmm(r)<min))){
+    toast("此日期的排程不可早於目前 5h 視窗（含跨日接續）結束時間。");return;
+   }
+   if(resumeAutoCount!==null&&min){
+    const begin=new Date(date+"T"+min+":00").getTime();
+    const first=Math.min(...active.map(r=>new Date(date+"T"+hhmm(r)+":00").getTime()));
+    if(Number.isFinite(first)&&first-begin<FIVE_HOUR_MS-60000){
+     toast("首次接續需要完整 5 小時視窗，請延後下一個固定錨點。");return;
+    }
+    if(resumeAutoCount>maxResumeCount(date,begin)){
+     toast("後續接續次數超過下一錨點前可用的視窗數。");return;
+    }
+   }
   }
- }
- if(weekly){
+  if(weekly){
   for(let day=0;day<7;day++){
    const applicable=rules.filter(r=>r.enabled&&r.days[day]);
    if(applicable.some(r=>r.start_kind==="resume")&&applicable.length>1){
