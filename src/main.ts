@@ -410,7 +410,10 @@ function render(){
  $("weekly-summary").textContent=s.settings.rules.filter(r=>r.enabled).map(r=>ruleLabel(r,true)).join("\n")||"沒有錨點";
  for(const [key,date,output] of [["today",today(0),"today-summary"],["tomorrow",today(1),"tomorrow-summary"]] as const){
   const over=s.settings.overrides[date];
-  $(output).textContent=over?.enabled?(over.resume_auto_count!=null?"首次接續（依實際 5h 重置）＋後續 "+over.resume_auto_count+" 次":over.rules.length?over.rules.filter(r=>r.enabled).map(r=>ruleLabel(r,false)).join("\n"):"覆寫：當天不觸發"):"使用每週預設";
+   $(output).textContent=over?.enabled?
+    [over.resume_auto_count!=null?"首次接續（依實際 5h 重置）＋後續 "+over.resume_auto_count+" 次":"",
+     ...over.rules.filter(r=>r.enabled).map(r=>ruleLabel(r,false))]
+      .filter(Boolean).join("\n")||"覆寫：當天不觸發":"使用每週預設";
  }
  $("settings-account").textContent=s.signed_in?(authInvalid?"登入已失效，請重新登入":"已登入"):"尚未登入";
  ($("sample") as HTMLSelectElement).value=String(s.settings.sampling_minutes);
@@ -636,7 +639,14 @@ function minAllowedTime(date:string){
  const q=snapshot?.usage;
  const reset=q?.primary_confirmed&&q.five_reset?Date.parse(q.five_reset):0;
   const reserved=(snapshot?.projected_busy_until??0)*1000;
-  const earliest=Math.max(begin,Date.now()+1000,Number.isFinite(reset)?reset+15000:0,reserved>0?reserved+15000:0);
+  const next=snapshot?.next;
+  const nextAt=(next?.at??0)*1000;
+  // Tomorrow's restriction also accounts for an anchor scheduled later today.
+  // This is a forecast; it is replaced by confirmed quota data after execution.
+  const predicted=next && ["anchor","recovery","resume"].includes(next.kind)
+     && nextAt>Date.now() && nextAt<begin
+     ?nextAt+(next.auto_count+1)*FIVE_HOUR_MS:0;
+  const earliest=Math.max(begin,Date.now()+1000,Number.isFinite(reset)?reset+15000:0,reserved>0?reserved+15000:0,predicted>0?predicted+15000:0);
  if(earliest>=end.getTime())return "";
  return new Date(Math.ceil(earliest/60000)*60000).toTimeString().slice(0,5);
 }
@@ -776,10 +786,15 @@ function drawRuleEditor(){
  ($("rule-add") as HTMLButtonElement).disabled=!weekly&&!overrideOn;
 }
 $("rule-add").onclick=()=>{
- const base=draft.at(-1),baseMinute=base?base.hour*60+base.minute+300:360;
- const min=editing==="weekly"?"":minAllowedTime(today(editing==="today"?0:1));
- if(editing!=="weekly"&&!min){toast("該日的 5h 視窗尚未結束，沒有可用起始時間");return;}
- const minMinute=min?Number(min.slice(0,2))*60+Number(min.slice(3)):0;
+  const min=editing==="weekly"?"":minAllowedTime(today(editing==="today"?0:1));
+  if(editing!=="weekly"&&!min){toast("該日已沒有可啟動的時段");return;}
+  const minMinute=min?Number(min.slice(0,2))*60+Number(min.slice(3)):0;
+  const base=draft.at(-1);
+  if(!base&&resumeAutoCount!==null&&minMinute+300>=1440){
+   toast("首次接續後的下一個固定錨點已跨日，今天無法再新增。");return;
+  }
+  const baseMinute=base?base.hour*60+base.minute+300:
+    resumeAutoCount!==null&&editing!=="weekly"?minMinute+300:360;
  let result:Rule|undefined;
  for(let i=0;i<288;i++){
   const t=(baseMinute+5*i)%1440;
