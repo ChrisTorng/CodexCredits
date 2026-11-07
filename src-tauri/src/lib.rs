@@ -48,6 +48,7 @@ struct Snapshot{
  ntfy_status:String,
  armed:bool,
  next:Option<engine::Next>,
+ projected_busy_until:Option<i64>,
  error:Option<String>,
  signed_in:bool,
 }
@@ -99,6 +100,16 @@ fn snapshot(s:&State)->Snapshot{
     #[cfg(not(target_os="android"))]
     {s.engine.lock().unwrap().next.clone()}
    },
+  projected_busy_until:{
+   #[cfg(target_os="android")]
+   {android_bridge::platform_status().ok().and_then(|v|v["projected_busy_until_ms"].as_i64()).filter(|v|*v>0).map(|v|v/1000)}
+   #[cfg(not(target_os="android"))]
+   {
+    let e=s.engine.lock().unwrap();
+    let u=s.usage.lock().unwrap();
+    engine::projected_busy_until(u.as_ref(),&e,now())
+   }
+  },
   error:s.error.lock().unwrap().clone(),
   signed_in:token().is_ok(),
  }
