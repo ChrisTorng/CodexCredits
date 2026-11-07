@@ -1015,7 +1015,15 @@ final class Scheduler {
             long start=date.atStartOfDay(zone).toInstant().toEpochMilli();
             long end=date.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli();
             long reset=q.primaryConfirmed&&q.primaryResetMs>now?q.primaryResetMs:0;
-            long at=Math.max(Math.max(afterMs,now),Math.max(start,reset))+RESET_GRACE_MS;
+            // An already-started chain can run into tomorrow. Do not let a
+            // tomorrow override start over those committed continuation windows.
+            long reserved=reset;
+            long chainBase=chainResetMs(c);
+            int chainCount=chainRemaining(c);
+            if(chainCount>0 && chainBase>0){
+                reserved=Math.max(reserved,Math.max(reset,chainBase)+chainCount*FIVE_HOURS_MS);
+            }
+            long at=Math.max(Math.max(afterMs,now),Math.max(start,reserved))+RESET_GRACE_MS;
             if(at>=end)continue;
             ScheduleConfig.Slot anchor=ScheduleConfig.nextAnchor(c,at-1_000L);
             long nextFixed=anchor==null?Long.MAX_VALUE:anchor.whenMs;
