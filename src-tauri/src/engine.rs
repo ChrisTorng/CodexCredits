@@ -255,7 +255,7 @@ pub fn is_stale(now:i64,at:i64)->bool{now-at>90}
    assert_eq!(next.kind,Kind::Resume);
   }
   #[test]fn tomorrow_resume_waits_for_todays_chain_across_midnight(){
-    let mut s=Settings::default();s.mode=Mode::Custom;
+    let mut s=Settings::default();s.mode=Mode::Custom;s.rules.clear();
     let today=Local::now().date_naive();
     let tomorrow=today+Duration::days(1);
     s.overrides.insert(tomorrow.to_string(),crate::schedule::Override{
