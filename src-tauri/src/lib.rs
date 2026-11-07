@@ -582,27 +582,42 @@ async fn consume(s:&State,allow_partial:bool,selected:Option<String>)->Result<()
   .show().map_err(|e|e.to_string())?;
  Ok("已送出測試通知".into())
 }
-#[tauri::command]fn get_local_state(s:tauri::State<'_,Arc<State>>)->Result<LocalState,String>{
- let (history,events)={
-  let db=s.db.lock().unwrap();
+// Keep disk I/O off the WebView event loop. A slow or busy local database must
+// not prevent the window from responding or showing already-rendered samples.
+#[tauri::command]
+async fn get_local_state(s:tauri::State<'_,Arc<State>>)->Result<LocalState,String>{
+ let state=Arc::clone(&*s);
+ tokio::task::spawn_blocking(move||{
+  let (history,events)={
+   let db=state.db.lock().unwrap();
+   #[cfg(target_os="android")]
+   legacy::sync_native(&db)?;
+   (storage::history(&db)?,storage::events(&db)?)
+  };
+  Ok(LocalState{snapshot:snapshot(&state),history,events})
+ }).await.map_err(|e|format!("本機用量歷史讀取工作失敗: {e}"))?
+}
+#[tauri::command]
+async fn get_history(s:tauri::State<'_,Arc<State>>)->Result<Vec<serde_json::Value>,String>{
+ let state=Arc::clone(&*s);
+ tokio::task::spawn_blocking(move||{
+  let db=state.db.lock().unwrap();
   #[cfg(target_os="android")]
   legacy::sync_native(&db)?;
-  (storage::history(&db)?,storage::events(&db)?)
- };
- Ok(LocalState{snapshot:snapshot(&s),history,events})
+  storage::history(&db)
+ }).await.map_err(|e|format!("用量歷史讀取工作失敗: {e}"))?
 }
-#[tauri::command]fn get_history(s:tauri::State<'_,Arc<State>>)->Result<Vec<serde_json::Value>,String>{
- let db=s.db.lock().unwrap();
- #[cfg(target_os="android")]
- legacy::sync_native(&db)?;
- storage::history(&db)
+#[tauri::command]
+async fn get_events(s:tauri::State<'_,Arc<State>>)->Result<Vec<serde_json::Value>,String>{
+ let state=Arc::clone(&*s);
+ tokio::task::spawn_blocking(move||{
+  let db=state.db.lock().unwrap();
+  #[cfg(target_os="android")]
+  legacy::sync_native(&db)?;
+  storage::events(&db)
+ }).await.map_err(|e|format!("事件讀取工作失敗: {e}"))?
 }
-#[tauri::command]fn get_events(s:tauri::State<'_,Arc<State>>)->Result<Vec<serde_json::Value>,String>{
- let db=s.db.lock().unwrap();
- #[cfg(target_os="android")]
- legacy::sync_native(&db)?;
- storage::events(&db)
-}
+
 fn defer_scheduled_retry(s:&State,planned:&engine::Next,seconds:i64){
  let mut e=s.engine.lock().unwrap();
  if planned.kind==engine::Kind::Resume{
