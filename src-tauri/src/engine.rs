@@ -225,6 +225,19 @@ pub fn is_stale(now:i64,at:i64)->bool{now-at>90}
    let done=Engine{resume_done_date:Some(date),..Default::default()};
    assert!(next_day_resume(&s,Some(&q),&done,now).is_none());
   }
+  #[test]fn tomorrow_resume_cannot_start_before_todays_active_window_expires(){
+   let mut s=Settings::default();s.mode=Mode::Custom;
+   let date=Local::now().date_naive();
+   let tomorrow=date+Duration::days(1);
+   s.overrides.insert(tomorrow.to_string(),crate::schedule::Override{
+    enabled:true,rules:vec![],resume_auto_count:Some(3)});
+   let today_evening=date.and_hms_opt(22,0,0).unwrap().and_local_timezone(Local).earliest().unwrap().timestamp();
+   let tomorrow_reset=tomorrow.and_hms_opt(4,0,0).unwrap().and_local_timezone(Local).earliest().unwrap().timestamp();
+   let q=Usage{primary_confirmed:true,five_reset:Some(DateTime::<Utc>::from_timestamp(tomorrow_reset,0).unwrap().to_rfc3339()),..Default::default()};
+   let next=next_day_resume(&s,Some(&q),&Engine::default(),today_evening).unwrap();
+   assert_eq!(next.at,tomorrow_reset+RESET_GRACE_SEC);
+   assert_eq!(next.kind,Kind::Resume);
+  }
   #[test]fn day_resume_without_active_window_starts_at_earliest_time(){
    let mut s=Settings::default();s.mode=Mode::Custom;
    let date=Local::now().date_naive();
