@@ -645,6 +645,8 @@ function maxResumeCount(date:string,at:number){
   const d=new Date(first);d.setDate(first.getDate()+offset);
   const dateKey=[d.getFullYear(),String(d.getMonth()+1).padStart(2,"0"),String(d.getDate()).padStart(2,"0")].join("-");
   for(const rule of allRules(dateKey)){
+   // Editing a day override replaces its inherited weekly anchors entirely.
+   if(dateKey===date&&editing!=="weekly")continue;
    if(rule.start_kind==="resume")continue;
    const trigger=new Date(d);trigger.setHours(rule.hour,rule.minute,0,0);
    if(trigger.getTime()>at)next=Math.min(next,trigger.getTime());
