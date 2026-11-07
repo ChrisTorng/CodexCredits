@@ -582,40 +582,59 @@ async fn consume(s:&State,allow_partial:bool,selected:Option<String>)->Result<()
   .show().map_err(|e|e.to_string())?;
  Ok("已送出測試通知".into())
 }
-// Keep disk I/O off the WebView event loop. A slow or busy local database must
-// not prevent the window from responding or showing already-rendered samples.
+// Windows reads local history in a worker; Android retains native JNI sync.
 #[tauri::command]
 async fn get_local_state(s:tauri::State<'_,Arc<State>>)->Result<LocalState,String>{
- let state=Arc::clone(&*s);
- tokio::task::spawn_blocking(move||{
+ #[cfg(target_os="android")]
+ {
   let (history,events)={
-   let db=state.db.lock().unwrap();
-   #[cfg(target_os="android")]
+   let db=s.db.lock().unwrap();
    legacy::sync_native(&db)?;
    (storage::history(&db)?,storage::events(&db)?)
   };
-  Ok(LocalState{snapshot:snapshot(&state),history,events})
- }).await.map_err(|e|format!("本機用量歷史讀取工作失敗: {e}"))?
+  return Ok(LocalState{snapshot:snapshot(&s),history,events});
+ }
+ #[cfg(not(target_os="android"))]
+ {
+  let state=Arc::clone(&*s);
+  tokio::task::spawn_blocking(move||{
+   let (history,events)={
+    let db=state.db.lock().unwrap();
+    (storage::history(&db)?,storage::events(&db)?)
+   };
+   Ok(LocalState{snapshot:snapshot(&state),history,events})
+  }).await.map_err(|e|format!("本機用量歷史讀取工作失敗: {e}"))?
+ }
 }
 #[tauri::command]
 async fn get_history(s:tauri::State<'_,Arc<State>>)->Result<Vec<serde_json::Value>,String>{
- let state=Arc::clone(&*s);
- tokio::task::spawn_blocking(move||{
-  let db=state.db.lock().unwrap();
-  #[cfg(target_os="android")]
+ #[cfg(target_os="android")]
+ {
+  let db=s.db.lock().unwrap();
   legacy::sync_native(&db)?;
-  storage::history(&db)
- }).await.map_err(|e|format!("用量歷史讀取工作失敗: {e}"))?
+  return storage::history(&db);
+ }
+ #[cfg(not(target_os="android"))]
+ {
+  let state=Arc::clone(&*s);
+  tokio::task::spawn_blocking(move||storage::history(&state.db.lock().unwrap()))
+    .await.map_err(|e|format!("用量歷史讀取工作失敗: {e}"))?
+ }
 }
 #[tauri::command]
 async fn get_events(s:tauri::State<'_,Arc<State>>)->Result<Vec<serde_json::Value>,String>{
- let state=Arc::clone(&*s);
- tokio::task::spawn_blocking(move||{
-  let db=state.db.lock().unwrap();
-  #[cfg(target_os="android")]
+ #[cfg(target_os="android")]
+ {
+  let db=s.db.lock().unwrap();
   legacy::sync_native(&db)?;
-  storage::events(&db)
- }).await.map_err(|e|format!("事件讀取工作失敗: {e}"))?
+  return storage::events(&db);
+ }
+ #[cfg(not(target_os="android"))]
+ {
+  let state=Arc::clone(&*s);
+  tokio::task::spawn_blocking(move||storage::events(&state.db.lock().unwrap()))
+    .await.map_err(|e|format!("事件讀取工作失敗: {e}"))?
+ }
 }
 
 fn defer_scheduled_retry(s:&State,planned:&engine::Next,seconds:i64){
@@ -972,7 +991,7 @@ pub fn run(){
    // Android's native AlarmManager/JobScheduler already runs in the background.
    // Do not keep a second, two-second polling loop alive in the Tauri process.
    // Check stored credentials away from the WebView event loop.
-    let logged_in=tokio::task::spawn_blocking(||token().is_ok()).await.unwrap_or(false);
+    let logged_in=token().is_ok();
     state.signed_in.store(logged_in,Ordering::Relaxed);
     state.auth_checked.store(true,Ordering::Relaxed);
     let _=handle.emit("credits:updated",());
