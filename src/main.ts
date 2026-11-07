@@ -714,7 +714,11 @@ function maxSafe(rule:Rule,rules:Rule[],weekly:boolean){
    min=Math.min(min,gap);
   }
  }
- return Number.isFinite(min)?Math.max(0,Math.min(6,Math.floor(min/300)-1)):3;
+ const periodic=Number.isFinite(min)?Math.max(0,Math.min(6,Math.floor(min/300)-1)):3;
+ if(weekly)return periodic;
+ const date=today(editing==="today"?0:1);
+ const first=new Date(date+"T"+hhmm(rule)+":00").getTime();
+ return Math.min(periodic,maxResumeCount(date,first));
 }
 function drawRuleEditor(){
  configureDayResume();
@@ -779,7 +783,7 @@ $("rule-add").onclick=()=>{
   const candidate:Rule={id:crypto.randomUUID(),enabled:true,days:[true,true,true,true,true,true,true],
    hour:Math.floor(t/60),minute:t%60,auto_count:0,start_kind:"anchor"};
   if(maxSafe(candidate,[...draft,candidate],editing==="weekly")>=0){
-   const overlaps=draft.some(x=>x.enabled&&Math.min(Math.abs(x.hour*60+x.minute-t),1440-Math.abs(x.hour*60+x.minute-t))<300);
+   const overlaps=draft.some(x=>x.enabled&&x.start_kind!=="resume"&&Math.min(Math.abs(x.hour*60+x.minute-t),1440-Math.abs(x.hour*60+x.minute-t))<300);
    if(!overlaps){result=candidate;break;}
   }
  }
@@ -796,7 +800,7 @@ $("rule-save").onclick=async()=>{
  }
  if(!weekly&&overrideOn){
   const date=today(editing==="today"?0:1),min=minAllowedTime(date);
-  if(!min || resumeAutoCount===null&&rules.some(r=>r.enabled&&hhmm(r)<min)){
+  if((!min&&(resumeAutoCount!==null||rules.some(r=>r.enabled))) || (min&&resumeAutoCount===null&&rules.some(r=>r.enabled&&hhmm(r)<min))){
    toast("此日期的第一項不可早於目前 5h 視窗結束時間；請修改或改選接續。");return;
   }
  }
