@@ -45,18 +45,22 @@ jobs:
           if ($installer.Count -ne 1) { throw "Expected exactly one Windows installer" }
           python scripts/verify_windows_icons.py src-tauri/target/release/CodexCredits.exe $installer[0].FullName
       - name: Stage portable files
+        id: stage
         shell: pwsh
         run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          "version=$version" >> $env:GITHUB_OUTPUT
           New-Item -ItemType Directory -Force release | Out-Null
           Copy-Item src-tauri/target/release/CodexCredits.exe release/
           Copy-Item README.md,LICENSE release/
           $setups = @(Get-ChildItem src-tauri/target/release/bundle/nsis -Filter '*-setup.exe')
-          if ($setups.Count -eq 0) { throw 'NSIS installer missing' }
+          if ($setups.Count -ne 1) { throw 'Expected exactly one NSIS installer' }
+          if (-not $setups[0].Name.Contains($version)) { throw "Installer filename does not contain version $version" }
           $setups | ForEach-Object { Copy-Item $_.FullName release/ }
           Get-ChildItem release/ | Select-Object Name,Length
       # GitHub Actions artifact already downloads as a ZIP; avoid nesting a second ZIP.
       - uses: actions/upload-artifact@v4
         with:
-          name: CodexCredits-Windows-x64
+          name: CodexCredits-Windows-v${{ steps.stage.outputs.version }}-x64
           path: release/
           if-no-files-found: error
