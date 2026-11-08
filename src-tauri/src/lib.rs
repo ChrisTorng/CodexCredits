@@ -46,7 +46,8 @@ struct LocalState{
 #[cfg(not(target_os="android"))]
 #[tauri::command]
 async fn get_startup_cache(s:tauri::State<'_,Arc<State>>)->Result<LocalState,String>{
- let app=s.app.clone();
+ let state=Arc::clone(&*s);
+ let app=state.app.clone();
  tokio::task::spawn_blocking(move||{
   let base=app.path().app_data_dir().map_err(|e|e.to_string())?;
   let db=rusqlite::Connection::open_with_flags(base.join("codexcredits.sqlite3"),
@@ -61,8 +62,11 @@ async fn get_startup_cache(s:tauri::State<'_,Arc<State>>)->Result<LocalState,Str
    global:storage::get_cached(&db,"last_global"),
    ntfy_status:"尚未測試".into(),
    armed:storage::get_meta(&db,"banked_armed").is_some(),
-   next:None,projected_busy_until:None,error:None,
-   signed_in:false,auth_checked:false,
+   next:state.engine.try_lock().ok().and_then(|e|e.next.clone()),
+   projected_busy_until:None,
+   error:state.error.try_lock().ok().and_then(|e|e.clone()),
+   signed_in:state.signed_in.load(Ordering::Relaxed),
+   auth_checked:state.auth_checked.load(Ordering::Relaxed),
   };
   Ok(LocalState{snapshot,history,events})
  }).await.map_err(|e|format!("本機離線快取工作失敗: {e}"))?
