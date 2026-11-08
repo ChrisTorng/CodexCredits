@@ -122,24 +122,6 @@ fn replan(s:&State){
   }
  }
  e.next=engine::next_event(&settings,usage.as_ref(),&e,now());
- let recovery=e.recovery;
- let pending=e.pending;
- let done=e.recovery_done_anchor;
- let resume_done=e.resume_done_date;
- let chain_remaining=e.chain_remaining;
- let chain_reset=e.chain_reset;
-  let chain_retry_at=e.chain_retry_at;
- drop(e);
- let db=s.db.lock().unwrap();
- let _=if let Some(r)=recovery{storage::save_cached(&db,"missed_anchor_recovery_v1",&r)}
- else{storage::set_meta(&db,"missed_anchor_recovery_v1",None)};
- let _=storage::set_meta(&db,"missed_anchor_recovery_done",Some(&done.to_string()));
- let _=storage::set_meta(&db,"day_resume_done_v1",resume_done.as_ref().map(|x|x.to_string()).as_deref());
- let _=storage::set_meta(&db,"chain_remaining_v1",Some(&chain_remaining.to_string()));
- let _=storage::set_meta(&db,"chain_reset_v1",chain_reset.as_ref().map(|x|x.to_string()).as_deref());
-  let _=storage::set_meta(&db,"chain_retry_at_v1",chain_retry_at.as_ref().map(|x|x.to_string()).as_deref());
- let _=if let Some(p)=pending{storage::save_cached(&db,"five_pending_verification_v1",&p)}
- else{storage::set_meta(&db,"five_pending_verification_v1",None)};
 }
 // A zero-used primary window can contain a sliding now+5h placeholder.
 // Only real usage, a previously successful local trigger, or a stable
