@@ -41,6 +41,37 @@ struct LocalState{
  history:Vec<serde_json::Value>,
  events:Vec<serde_json::Value>,
 }
+// An independent read-only SQLite connection allows the first screen to load
+// saved usage even if a live refresh or the in-memory state mutex is blocked.
+#[cfg(not(target_os="android"))]
+#[tauri::command]
+async fn get_startup_cache(s:tauri::State<'_,Arc<State>>)->Result<LocalState,String>{
+ let app=s.app.clone();
+ tokio::task::spawn_blocking(move||{
+  let base=app.path().app_data_dir().map_err(|e|e.to_string())?;
+  let db=rusqlite::Connection::open_with_flags(base.join("codexcredits.sqlite3"),
+   rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(|e|e.to_string())?;
+  db.busy_timeout(Duration::from_secs(2)).map_err(|e|e.to_string())?;
+  let history=storage::history(&db)?;
+  let events=storage::events(&db)?;
+  let snapshot=Snapshot{
+   settings:storage::get_settings(&db),
+   usage:storage::restore_usage(&db),
+   credits:storage::get_cached(&db,"last_credits"),
+   global:storage::get_cached(&db,"last_global"),
+   ntfy_status:"尚未測試".into(),
+   armed:storage::get_meta(&db,"banked_armed").is_some(),
+   next:None,projected_busy_until:None,error:None,
+   signed_in:false,auth_checked:false,
+  };
+  Ok(LocalState{snapshot,history,events})
+ }).await.map_err(|e|format!("本機離線快取工作失敗: {e}"))?
+}
+#[cfg(target_os="android")]
+#[tauri::command]
+fn get_startup_cache(s:tauri::State<'_,Arc<State>>)->Result<LocalState,String>{
+ get_local_state(s)
+}
 #[derive(Serialize)]
 struct Snapshot{
  settings:schedule::Settings,
@@ -1009,7 +1040,7 @@ pub fn run(){
  })
  .invoke_handler(tauri::generate_handler![
   get_snapshot,save_settings,login_with_chatgpt,sign_out,refresh,manual_trigger,
-  banked_reset,toggle_banked_armed,ntfy_test,native_notify_test,get_local_state,get_history,get_events,
+  banked_reset,toggle_banked_armed,ntfy_test,native_notify_test,get_local_state,get_startup_cache,get_history,get_events,
   android_platform_status,android_open_system_settings
  ])
  .run(tauri::generate_context!()).expect("CodexCredits could not start");
