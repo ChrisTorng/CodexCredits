@@ -274,7 +274,7 @@ function paintQuota(id:string,used:number|null|undefined,reset:string|null|undef
     valueFormatter:(v:unknown)=>typeof v==="number"?Math.round(v)+"% 剩餘":String(v)},
   series:[
    {name:"理想剩餘",type:"line",data:ideal,showSymbol:false,silent:true,lineStyle:{color,type:"dashed",width:1.5,opacity:.8},areaStyle:{color,opacity:.08}},
-   {name:"實際剩餘",type:"line",data:historyOnly?historic:actual,showSymbol:false,lineStyle:{width:2.4,color},itemStyle:{color},areaStyle:{color,opacity:.18},
+   {name:"實際剩餘",type:"line",data:historyOnly?historic:actual,showSymbol:historyOnly,lineStyle:{width:2.4,color},itemStyle:{color},areaStyle:{color,opacity:.18},
     markLine:currentReading?{symbol:["none","none"],silent:true,label:{show:false},
       lineStyle:{color:p.grid,width:1,type:"solid"},
       data:[{xAxis:start},{xAxis:until},...ticks.map(t=>({xAxis:t})),...creditMarker,...(inWindow?[{xAxis:now,lineStyle:{color:p.text,type:"dashed",width:1}}]:[])]}:undefined}
@@ -389,7 +389,7 @@ function render(){
  const confirmed=!!u?.primary_confirmed&&!!u.five_reset&&new Date(u.five_reset).getTime()>Date.now();
  const checkedAt=u?.checked_at?Date.parse(u.checked_at):0;
  const stale=!Number.isFinite(checkedAt)||checkedAt<=0||Date.now()-checkedAt>15*60000;
- $("trigger-preview").textContent=!s.signed_in?"請先登入":
+ $("trigger-preview").textContent=!s.auth_checked?"正在確認登入狀態 · 可先查看歷史用量":!s.signed_in?"請先登入":
    stale?(u?.checked_at?"顯示上次用量 · 自動更新中":"正在取得最新用量…"):
    confirmed?"5h 視窗已確認啟動 · 下次可開始："+fdate(u?.five_reset):
    "5h 尚未確認啟動 · 可立即開始（目前重置時間可能只是預估）";
@@ -872,20 +872,44 @@ void listen("credits:updated",async()=>{
  catch{await Promise.allSettled([load(),loadHistory()]);}
 });
 type LocalState={snapshot:Snapshot;history:Sample[];events:Event[]};
+// Explicit deadlines keep a hung IPC worker from leaving the window permanently
+// on a loading placeholder. The underlying request may complete later.
+function limited<T>(promise:Promise<T>,label:string,ms:number):Promise<T>{
+ return new Promise((resolve,reject)=>{
+  const t=window.setTimeout(()=>reject(new Error(label+" 超過 "+Math.round(ms/1000)+" 秒")),ms);
+  promise.then(v=>{clearTimeout(t);resolve(v);},e=>{clearTimeout(t);reject(e);});
+ });
+}
+function restoreLocal(cached:LocalState){
+ snapshot=cached.snapshot;
+ samples=chronological(cached.history);
+ events=cached.events;
+ render();
+}
 async function initialize(){
-
- // Load persisted samples and events first, independent of OAuth, quota API,
- // or slow startup network operations. Never require "更新用量" to restore history.
- try{
-  await loadLocalState();
-
- }catch(e){
-
-  toast("讀取本機資料失敗："+String(e));
-  await Promise.allSettled([loadHistory(),load()]);
+ // On Windows, fetch *only* local SQLite data using an independent read-only
+ // connection before requesting the live snapshot or checking credentials.
+ if(!androidRuntime){
+  try{
+   const offline=await limited(call<LocalState>("get_startup_cache"),"讀取本機歷史",7000);
+   restoreLocal(offline);
+  }catch(e){
+   $("account").textContent="本機歷史讀取失敗："+String(e);
+   toast("本機歷史讀取失敗："+String(e));
+  }
+  // The live snapshot is optional for first paint. Never block saved history.
+  void limited(call<LocalState>("get_local_state"),"讀取最新程式狀態",10000)
+   .then(restoreLocal)
+   .catch(e=>{
+    if(snapshot){$("account").textContent+=" · 最新狀態尚未同步";}
+    else {$("account").textContent="本機狀態讀取失敗："+String(e);}
+   });
+ }else{
+  try{await loadLocalState();}
+  catch(e){toast("本機資料讀取失敗："+String(e));await Promise.allSettled([loadHistory(),load()]);}
  }
  requestAnimationFrame(()=>{resizeVisibleCharts();draw();});
- await refreshNotificationPermission();
+ void refreshNotificationPermission();
 }
 void initialize();
 // Refresh the local expiry countdown even when quota polling is idle.
