@@ -964,7 +964,21 @@ pub fn run(){
   tauri::async_runtime::spawn(async move{
    // First obtain a fresh quota after restart; never replay old persisted alarms.
    // Check stored credentials away from the WebView event loop.
-    let logged_in=tokio::task::spawn_blocking(||token().is_ok()).await.unwrap_or(false);
+    let logged_in=match tokio::time::timeout(Duration::from_secs(8),
+      tokio::task::spawn_blocking(token)).await{
+      Ok(Ok(Ok(_)))=>true,
+      Ok(Ok(Err(e)))=>{
+       if e!="請先登入"{*state.error.lock().unwrap()=Some(format!("Windows 登入資訊讀取失敗: {e}"));}
+       false
+      },
+      Ok(Err(e))=>{
+       *state.error.lock().unwrap()=Some(format!("Windows 登入工作異常: {e}"));false
+      },
+      Err(_)=>{
+       *state.error.lock().unwrap()=Some("Windows 憑證讀取逾時，仍可查看本機歷史用量".into());
+       false
+      }
+     };
     state.signed_in.store(logged_in,Ordering::Relaxed);
     state.auth_checked.store(true,Ordering::Relaxed);
     let _=handle.emit("credits:updated",());
