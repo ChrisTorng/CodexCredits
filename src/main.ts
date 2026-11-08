@@ -513,7 +513,8 @@ async function refresh(){
  closeToast();
  try{
   await limited(call("refresh"),"更新目前用量",30000);
-  await limited(call<LocalState>("get_local_state"),"讀取更新後的用量",10000).then(restoreLocal);
+  await limited(call<LocalState>(androidRuntime?"get_local_state":"get_startup_cache"),
+   "讀取更新後的用量",10000).then(restoreLocal);
  }catch(e){
   toast("更新失敗："+String(e));
   // Do not overwrite the offline history with placeholders on failure.
@@ -873,8 +874,20 @@ window.addEventListener("resize",resizeVisibleCharts);
 const obs=new ResizeObserver(resizeVisibleCharts);
 obs.observe($("app"));
 void listen("credits:updated",async()=>{
- try{await loadLocalState();}
- catch{await Promise.allSettled([load(),loadHistory()]);}
+ if(!androidRuntime){
+  // The independent SQLite reader also sees newly saved online samples.
+  // Never require the possibly stalled shared-state command for UI updates.
+  try{
+   const cache=await limited(call<LocalState>("get_startup_cache"),"讀取最新本機用量",7000);
+   restoreLocal(cache);
+  }catch(e){
+   try{await limited(call<LocalState>("get_local_state"),"讀取程式狀態",7000).then(restoreLocal);}
+   catch{toast("用量同步失敗："+String(e));}
+  }
+ }else{
+  try{await loadLocalState();}
+  catch{await Promise.allSettled([load(),loadHistory()]);}
+ }
 });
 type LocalState={snapshot:Snapshot;history:Sample[];events:Event[]};
 // Explicit deadlines keep a hung IPC worker from leaving the window permanently
