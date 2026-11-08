@@ -384,7 +384,7 @@ function render(){
   :!s.auth_checked?"正在確認登入狀態 · 歷史用量可離線檢視":"ChatGPT 尚未登入";
  $("primary-percent").textContent=percent(u?.five_hour);
  $("weekly-percent").textContent=percent(u?.weekly);
- $("status-next").textContent=mode==="off"?"已關閉 · 尚未排程":
+ $("status-next").textContent=!s.auth_checked?"本機資料已載入 · 正在確認排程狀態":mode==="off"?"已關閉 · 尚未排程":
    (mode==="auto"?"Reset 後自動 · ":"錨點＋接續 · ")+(s.next?fdate(new Date(s.next.at*1000).toISOString())+" · "+s.next.reason:"尚未排程");
  const confirmed=!!u?.primary_confirmed&&!!u.five_reset&&new Date(u.five_reset).getTime()>Date.now();
  const checkedAt=u?.checked_at?Date.parse(u.checked_at):0;
@@ -511,12 +511,17 @@ async function refresh(){
  if(refreshing)return;
  refreshing=true;
  closeToast();
- try{await call("refresh");await loadLocalState();}
- catch(e){toast("更新失敗："+String(e));await load();}
+ try{
+  await limited(call("refresh"),"更新目前用量",30000);
+  await limited(call<LocalState>("get_local_state"),"讀取更新後的用量",10000).then(restoreLocal);
+ }catch(e){
+  toast("更新失敗："+String(e));
+  // Do not overwrite the offline history with placeholders on failure.
+ }
  finally{refreshing=false;}
 }
 async function refreshIfStale(){
- if(document.hidden||loginInProgress||refreshing)return;
+ if(!snapshot||!snapshot.auth_checked||document.hidden||loginInProgress||refreshing)return;
  const checked=snapshot?.usage?.checked_at?Date.parse(snapshot.usage.checked_at):0;
  const now=Date.now();
  if(Number.isFinite(checked)&&checked>0&&now-checked<90_000)return;
