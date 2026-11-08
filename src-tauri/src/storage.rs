@@ -138,6 +138,19 @@ pub fn events(db:&Connection)->Result<Vec<serde_json::Value>,String>{
   assert_eq!(restore_usage(&db).unwrap().plan,"plus");
   drop(db);let _=std::fs::remove_file(path);
  }
+ #[test]fn readonly_startup_history_is_available_while_writer_connection_is_open(){
+  let path=std::env::temp_dir().join(format!("codexcredits-readonly-{}.sqlite3",uuid::Uuid::new_v4()));
+  let writer=open(&path).unwrap();
+  add_sample(&writer,Some(12.),Some(28.),None,None).unwrap();
+  event(&writer,"startup","歷史用量應立即顯示").unwrap();
+  let reader=Connection::open_with_flags(&path,rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+  reader.busy_timeout(std::time::Duration::from_secs(2)).unwrap();
+  assert_eq!(restore_usage(&reader).unwrap().five_hour,Some(12.));
+  assert_eq!(history(&reader).unwrap()[0]["weekly"],28.);
+  assert_eq!(events(&reader).unwrap()[0]["kind"],"startup");
+  drop(reader);drop(writer);
+  let _=std::fs::remove_file(path);
+ }
  #[test]fn persisted_history_survives_reopening_database(){
   let path=std::env::temp_dir().join(format!("codexcredits-history-test-{}.sqlite3",uuid::Uuid::new_v4()));
   {
