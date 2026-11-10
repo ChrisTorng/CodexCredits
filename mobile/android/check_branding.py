@@ -11,8 +11,8 @@ assert android["productName"]=="Codex Credits"
 assert android["identifier"]=="com.christorng.androidcodextools"
 assert windows["identifier"]=="com.christorng.codexcredits"
 assert windows["productName"]=="CodexCredits"
-assert android["version"]==windows["version"]=="2.0.19"
-assert android["bundle"]["android"]["versionCode"]==2000019
+assert android["version"]==windows["version"]=="2.0.25"
+assert android["bundle"]["android"]["versionCode"]==2000025
 assert windows["app"]["windows"][0]["title"]=="Codex Credits"
 assert windows["bundle"]["windows"]["nsis"]["installerHooks"]=="nsis/install-hooks.nsh"
 assert windows["bundle"]["windows"]["nsis"]["installerIcon"]=="icons/icon.ico"
