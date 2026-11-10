@@ -1,7 +1,7 @@
 name: Windows Build
 on:
   push:
-    branches: [main, android-parity]
+    branches: [main, android-parity, 'diagnostic/v2.0.25-v2019-source-control']
   pull_request:
     branches: [main]
   workflow_dispatch:
@@ -51,12 +51,13 @@ jobs:
           Copy-Item src-tauri/target/release/CodexCredits.exe release/
           Copy-Item README.md,LICENSE release/
           $setups = @(Get-ChildItem src-tauri/target/release/bundle/nsis -Filter '*-setup.exe')
-          if ($setups.Count -eq 0) { throw 'NSIS installer missing' }
+          if ($setups.Count -ne 1) { throw 'Expected exactly one NSIS installer' }
+          if (-not $setups[0].Name.Contains('2.0.25')) { throw 'NSIS filename missing v2.0.25' }
           $setups | ForEach-Object { Copy-Item $_.FullName release/ }
           Get-ChildItem release/ | Select-Object Name,Length
       # GitHub Actions artifact already downloads as a ZIP; avoid nesting a second ZIP.
       - uses: actions/upload-artifact@v4
         with:
-          name: CodexCredits-Windows-x64
+          name: CodexCredits-Windows-v2.0.25-x64
           path: release/
           if-no-files-found: error
