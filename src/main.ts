@@ -31,7 +31,7 @@ app.innerHTML=[
 '<nav class="tabs" aria-label="功能選單"><button class="tab narrow-tab active" data-tab="status">● 狀態</button><button class="tab narrow-tab" data-tab="history">▥ 歷程</button><button class="tab narrow-tab" data-tab="schedule">◷ 排程</button><button class="tab narrow-tab" data-tab="settings">⚙ 設定</button><button class="tab wide-tab active" data-group="usage">● 狀態與歷程</button><button class="tab wide-tab" data-group="planning">◷ 排程與設定</button></nav>',
 '<div class="content">',
 '<main class="page visible" id="page-status">',
-'<p id="account" class="account">ChatGPT 尚未登入</p>',
+'<p id="account" class="account">ChatGPT 尚未登入</p><p id="startup-stage" class="note">診斷階段：前端介面初始化</p>',
 '<section class="card quota"><div class="card-title"><strong>5 小時</strong><strong id="primary-percent">—</strong></div><div class="quota-chart" id="primary-chart"></div></section>',
 '<section class="card quota"><div class="card-title"><strong>週配額</strong><strong id="weekly-percent">—</strong></div><div class="quota-chart" id="weekly-chart"></div></section>',
 '<section class="card compact"><h2>下一次排程</h2><p id="status-next">尚未排程</p></section>',
@@ -74,6 +74,10 @@ app.innerHTML=[
 '<button class="action" id="rule-add">＋ 新增錨點</button><button class="action" id="rule-recommended">套用建議：06:00 ＋ 接續 3 次</button>',
 '<div class="dialog-footer"><button id="rule-cancel">取消</button><button class="primary" id="rule-save">儲存</button></div></dialog>'
 ].join("");
+const diagnosticStage=(message:string)=>{
+ const label=document.getElementById("startup-stage");
+ if(label)label.textContent="診斷階段："+message;
+};
 const androidRuntime=/Android/i.test(navigator.userAgent);
 let checkAlarmPolicy:()=>Promise<void>=async()=>{};
 if(androidRuntime){
@@ -466,11 +470,14 @@ async function loadHistory(){
 }
 // Read one consistent snapshot (including quota samples and events) over one IPC call.
 async function loadLocalState(){
+ diagnosticStage("正在等待 Rust 讀取本機歷史");
  const cached=await call<LocalState>("get_local_state");
+ diagnosticStage("收到資料，正在繪製畫面");
  snapshot=cached.snapshot;
  samples=chronological(cached.history);
  events=cached.events;
  render();
+ diagnosticStage("本機歷史載入完成");
 }
 async function refresh(){
  if(refreshing)return;
@@ -731,14 +738,14 @@ void listen("credits:updated",async()=>{
 });
 type LocalState={snapshot:Snapshot;history:Sample[];events:Event[]};
 async function initialize(){
-
+ diagnosticStage("準備首次資料讀取");
  // Load persisted samples and events first, independent of OAuth, quota API,
  // or slow startup network operations. Never require "更新配額" to restore history.
  try{
   await loadLocalState();
 
  }catch(e){
-
+  diagnosticStage("首次讀取失敗："+String(e));
   toast("讀取本機資料失敗："+String(e));
   await Promise.allSettled([loadHistory(),load()]);
  }
