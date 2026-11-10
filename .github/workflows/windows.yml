@@ -1,7 +1,7 @@
 name: Windows Build
 on:
   push:
-    branches: [main, android-parity, 'diagnostic/v2.0.27-old-ui-new-backend']
+    branches: [main, android-parity, 'diagnostic/v2.0.27-startup-stage-trace']
   pull_request:
     branches: [main]
   workflow_dispatch:
