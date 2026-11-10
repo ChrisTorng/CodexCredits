@@ -894,14 +894,18 @@ pub fn run(){
    .ok_or_else(||std::io::Error::other("Bundled Codex Credits icon is missing"))?
    .clone();
   if let Some(window)=app.get_webview_window("main"){
+   trace_stage("setup.icon.before");
    window.set_icon(icon.clone())?;
+   trace_stage("setup.icon.after");
   }
   #[cfg(target_os="windows")]
   {
    let key=concat!("icon_cache_refreshed_",env!("CARGO_PKG_VERSION"));
    let db=state.db.lock().unwrap();
    if storage::get_meta(&db,key).is_none(){
+    trace_stage("setup.shell.before");
     refresh_windows_icon_cache();
+    trace_stage("setup.shell.after");
     let _=storage::set_meta(&db,key,Some("1"));
    }
   }
@@ -918,16 +922,23 @@ pub fn run(){
      "show"=>{if let Some(w)=app.get_webview_window("main"){let _=w.show();let _=w.set_focus();}},
      "quit"=>app.exit(0),_=>{}
    }).build(app)?;
+   trace_stage("setup.tray.after");
   }
   #[cfg(not(target_os="android"))]
   tauri::async_runtime::spawn(async move{
+   trace_stage("background.enter");
    // First obtain a fresh quota after restart; never replay old persisted alarms.
-   if token().is_ok(){
+   trace_stage("background.token.before");
+   let signed_in=token().is_ok();
+   trace_stage("background.token.after");
+   if signed_in{
+    trace_stage("background.refresh.before");
     if let Err(e)=refresh_internal(&state,true).await{
      *state.error.lock().unwrap()=Some(e);
     }
     // The first refresh must update the UI as well, not only periodic polls.
     let _=handle.emit("credits:updated",());
+    trace_stage("background.refresh.after");
    }
    let mut last_sample=now();
    loop{
@@ -980,6 +991,7 @@ pub fn run(){
     let _=handle.emit("credits:updated",());
    }
   });
+  trace_stage("setup.complete");
   Ok(())
  }).on_window_event(|window,event|{
   #[cfg(desktop)]
