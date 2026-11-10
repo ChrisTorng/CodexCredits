@@ -61,6 +61,19 @@ fn refresh_windows_icon_cache(){
  }
  unsafe{SHChangeNotify(0x08000000,0,std::ptr::null(),std::ptr::null());}
 }
+// Diagnostic-only trace, independent of all application locks.
+#[cfg(target_os="windows")]
+fn trace_stage(stage:&str){
+ use std::io::Write;
+ let _=(||->std::io::Result<()>{
+  let mut file=std::fs::OpenOptions::new().create(true).append(true)
+   .open(std::env::temp_dir().join("CodexCredits-startup-v2.0.27.log"))?;
+  writeln!(file,"{} pid={} thread={:?} {}",chrono::Local::now().format("%Y-%m-%d %H:%M:%S%.3f"),std::process::id(),std::thread::current().id(),stage)?;
+  file.flush()
+ })();
+}
+#[cfg(not(target_os="windows"))]
+fn trace_stage(_stage:&str){}
 fn now()->i64{chrono::Utc::now().timestamp()}
 fn token()->Result<String,String>{credentials::load()}
 #[cfg(target_os="android")]
@@ -82,12 +95,13 @@ fn native_next()->Option<engine::Next>{
  })
 }
 fn snapshot(s:&State)->Snapshot{
- Snapshot{
-  settings:s.settings.lock().unwrap().clone(),
-  usage:s.usage.lock().unwrap().clone(),
-  credits:s.credits.lock().unwrap().clone(),
-  global:s.global.lock().unwrap().clone(),
-  ntfy_status:s.ntfy_status.lock().unwrap().clone(),
+ trace_stage("snapshot.enter");
+ let result=Snapshot{
+  settings:{trace_stage("snapshot.settings.before");let v=s.settings.lock().unwrap().clone();trace_stage("snapshot.settings.after");v},
+  usage:{trace_stage("snapshot.usage.before");let v=s.usage.lock().unwrap().clone();trace_stage("snapshot.usage.after");v},
+  credits:{trace_stage("snapshot.credits.before");let v=s.credits.lock().unwrap().clone();trace_stage("snapshot.credits.after");v},
+  global:{trace_stage("snapshot.global.before");let v=s.global.lock().unwrap().clone();trace_stage("snapshot.global.after");v},
+  ntfy_status:{trace_stage("snapshot.ntfy_status.before");let v=s.ntfy_status.lock().unwrap().clone();trace_stage("snapshot.ntfy_status.after");v},
   armed:{
     #[cfg(target_os="android")]
     {android_bridge::banked_armed().unwrap_or_else(|_|s.armed.lock().unwrap().is_some())}
@@ -105,19 +119,26 @@ fn snapshot(s:&State)->Snapshot{
    {android_bridge::platform_status().ok().and_then(|v|v["projected_busy_until_ms"].as_i64()).filter(|v|*v>0).map(|v|v/1000)}
    #[cfg(not(target_os="android"))]
    {
+    trace_stage("snapshot.projected.engine.before");
     let e=s.engine.lock().unwrap();
+    trace_stage("snapshot.projected.engine.after");
+    trace_stage("snapshot.projected.usage.before");
     let u=s.usage.lock().unwrap();
+    trace_stage("snapshot.projected.usage.after");
     engine::projected_busy_until(u.as_ref(),&e,now())
    }
   },
-  error:s.error.lock().unwrap().clone(),
-  signed_in:token().is_ok(),
- }
+  error:{trace_stage("snapshot.error.before");let v=s.error.lock().unwrap().clone();trace_stage("snapshot.error.after");v},
+  signed_in:{trace_stage("snapshot.token.before");let v=token().is_ok();trace_stage("snapshot.token.after");v},
+ };
+ trace_stage("snapshot.done");
+ result
 }
 fn record(s:&State,kind:&str,message:&str){
  let _=storage::event(&s.db.lock().unwrap(),kind,message);
 }
 fn replan(s:&State){
+ trace_stage("replan.enter");
  let settings=s.settings.lock().unwrap().clone();
  let usage=s.usage.lock().unwrap().clone();
  let mut e=s.engine.lock().unwrap();
@@ -129,7 +150,9 @@ fn replan(s:&State){
    }
   }
  }
+ trace_stage("replan.next.before");
  e.next=engine::next_event(&settings,usage.as_ref(),&e,now());
+ trace_stage("replan.next.after");
  let recovery=e.recovery;
  let pending=e.pending;
  let done=e.recovery_done_anchor;
@@ -138,7 +161,9 @@ fn replan(s:&State){
  let chain_reset=e.chain_reset;
   let chain_retry_at=e.chain_retry_at;
  drop(e);
+ trace_stage("replan.db.before");
  let db=s.db.lock().unwrap();
+ trace_stage("replan.db.after");
  let _=if let Some(r)=recovery{storage::save_cached(&db,"missed_anchor_recovery_v1",&r)}
  else{storage::set_meta(&db,"missed_anchor_recovery_v1",None)};
  let _=storage::set_meta(&db,"missed_anchor_recovery_done",Some(&done.to_string()));
@@ -570,13 +595,24 @@ async fn consume(s:&State,allow_partial:bool,selected:Option<String>)->Result<()
  Ok("已送出測試通知".into())
 }
 #[tauri::command]fn get_local_state(s:tauri::State<'_,Arc<State>>)->Result<LocalState,String>{
+ trace_stage("ipc.local.enter");
  let (history,events)={
+  trace_stage("ipc.local.db.before");
   let db=s.db.lock().unwrap();
+  trace_stage("ipc.local.db.after");
   #[cfg(target_os="android")]
   legacy::sync_native(&db)?;
-  (storage::history(&db)?,storage::events(&db)?)
+  trace_stage("ipc.local.history.before");
+  let history=storage::history(&db)?;
+  trace_stage("ipc.local.history.after");
+  let events=storage::events(&db)?;
+  trace_stage("ipc.local.events.after");
+  (history,events)
  };
- Ok(LocalState{snapshot:snapshot(&s),history,events})
+ trace_stage("ipc.local.snapshot.before");
+ let state=snapshot(&s);
+ trace_stage("ipc.local.snapshot.after");
+ Ok(LocalState{snapshot:state,history,events})
 }
 #[tauri::command]fn get_history(s:tauri::State<'_,Arc<State>>)->Result<Vec<serde_json::Value>,String>{
  let db=s.db.lock().unwrap();
@@ -795,9 +831,12 @@ pub fn run(){
  }
  builder
  .setup(|app|{
+  trace_stage("setup.enter");
   let handle=app.handle().clone();
   let path=handle.path().app_data_dir()?;std::fs::create_dir_all(&path)?;
+  trace_stage("setup.db.before");
   let db=storage::open(&path.join("codexcredits.sqlite3")).map_err(std::io::Error::other)?;
+  trace_stage("setup.db.after");
   #[cfg(target_os="android")]
   if storage::get_meta(&db,"android_quota_cutover_ms_v2").is_none(){
    // Discard ambiguous old samples; keep sign-in, settings and events.
@@ -807,7 +846,9 @@ pub fn run(){
   }
   #[cfg(target_os="android")]
   let migration_error=legacy::import(&db).err();
+  trace_stage("setup.settings.before");
   let settings=storage::get_settings(&db);
+  trace_stage("setup.settings.after");
   // Restore last known quota before OAuth or any network call.
   let cached_usage=storage::restore_usage(&db);
   let cached_credits=storage::get_cached::<api::Credits>(&db,"last_credits");
@@ -827,6 +868,7 @@ pub fn run(){
    .and_then(|v|v.parse::<i64>().ok()).unwrap_or(0);
   #[cfg(target_os="android")]
   let armed=if android_bridge::banked_armed().unwrap_or(false){Some("android-native".into())}else{armed};
+  trace_stage("setup.engine_restore.after");
   let state=Arc::new(State{
    app:handle.clone(),db:Mutex::new(db),settings:Mutex::new(settings),usage:Mutex::new(cached_usage),
    credits:Mutex::new(cached_credits),global:Mutex::new(cached_global),last_credits:Mutex::new(0),last_global:Mutex::new(0),
@@ -839,6 +881,7 @@ pub fn run(){
    login_busy:tokio::sync::Mutex::new(())
   });
   app.manage(state.clone());
+  trace_stage("setup.state.managed");
   #[cfg(desktop)]
   {
   let show=MenuItem::with_id(app,"show","開啟 Codex Credits",true,None::<&str>)?;
@@ -862,6 +905,7 @@ pub fn run(){
     let _=storage::set_meta(&db,key,Some("1"));
    }
   }
+  trace_stage("setup.tray.before");
   TrayIconBuilder::with_id("quota").icon(tray_status::icon(None,now())).tooltip("Codex Credits · 正在取得配額").show_menu_on_left_click(false).menu(&menu)
    .on_tray_icon_event(|tray,event|{
      if let TrayIconEvent::DoubleClick{button:MouseButton::Left,..}=event{
