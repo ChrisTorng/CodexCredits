@@ -123,6 +123,35 @@ pub fn events(db:&Connection)->Result<Vec<serde_json::Value>,String>{
 }
 #[cfg(test)]mod tests{
  use super::*;
+ #[test]fn pending_reset_and_chain_state_survive_database_reopen(){
+  let path=std::env::temp_dir().join(format!("codexcredits-schedule-{}.sqlite3",uuid::Uuid::new_v4()));
+  let now=1_800_000_000_i64;
+  let expected=crate::engine::PendingVerification{at:now+120,
+   expected_reset:now+5*3600,auto_count:2,from_recovery:false,resume_date:None};
+  {
+   let db=open(&path).unwrap();
+   set_meta(&db,"chain_remaining_v1",Some("2")).unwrap();
+   set_meta(&db,"chain_reset_v1",Some(&(now+3600).to_string())).unwrap();
+   save_cached(&db,"five_pending_verification_v1",&expected).unwrap();
+  }
+  {
+   let db=open(&path).unwrap();
+   let restored:crate::engine::PendingVerification=
+    get_cached(&db,"five_pending_verification_v1").unwrap();
+   assert_eq!(restored,expected);
+   let chain_count=get_meta(&db,"chain_remaining_v1").unwrap().parse::<u8>().unwrap();
+   assert_eq!(chain_count,2);
+   let mut settings=crate::schedule::Settings::default();
+   settings.mode=crate::schedule::Mode::Custom;
+   let engine=crate::engine::Engine{chain_remaining:chain_count,
+    chain_reset:get_meta(&db,"chain_reset_v1").and_then(|x|x.parse().ok()),
+    pending:Some(restored),..Default::default()};
+   let next=crate::engine::next_event(&settings,None,&engine,now).unwrap();
+   assert_eq!(next.kind,crate::engine::Kind::Verify);
+   assert_eq!(next.at,now+120);
+  }
+  let _=std::fs::remove_file(path);
+ }
  #[test]fn previous_sample_restores_quota_before_first_online_refresh(){
   let path=std::env::temp_dir().join(format!("codexcredits-restore-{}.sqlite3",uuid::Uuid::new_v4()));
   let db=open(&path).unwrap();
