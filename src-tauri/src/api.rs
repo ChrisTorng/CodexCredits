@@ -47,15 +47,15 @@ pub async fn fetch_usage(token:&str,account_id:Option<&str>)->Result<Usage,Strin
  {
   let _=(token,account_id);
   let raw=tokio::task::spawn_blocking(crate::android_bridge::native_usage)
-   .await.map_err(|e|format!("Android 配額工作失敗: {e}"))??;
-  return native_json(&raw,"Android 配額查詢");
+   .await.map_err(|e|format!("Android 用量工作失敗: {e}"))??;
+  return native_json(&raw,"Android 用量查詢");
  }
  #[cfg(not(target_os="android"))]
  {
 
  let client=http()?;
  let response=authorized(&client,USAGE_URL,token,account_id).send().await.map_err(|e|e.to_string())?;
- if !response.status().is_success(){return Err(format!("配額查詢 HTTP {}",response.status()));}
+ if !response.status().is_success(){return Err(format!("用量查詢 HTTP {}",response.status()));}
  let json:Value=response.json().await.map_err(|e|e.to_string())?;
  let limits=&json["rate_limit"];
  let (five_hour,five_reset)=bucket(limits,"primary_window");
