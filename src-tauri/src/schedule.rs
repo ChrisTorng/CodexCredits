@@ -184,5 +184,38 @@ pub fn conflict_ids(rules:&[Rule],weekly:bool)->Vec<String>{
    assert_eq!(s.resume_for_date(Local::now().date_naive()),Some(6)); // Per-day horizon; re-arms the next day without a fixed anchor.
    assert!(s.next_slot(Local::now()).is_none());
   }
+  #[test]fn today_resume_override_keeps_tomorrow_weekly_schedule(){
+   let today=Local::now().date_naive();
+   let tomorrow=today+Duration::days(1);
+   let mut settings=Settings::default();
+   settings.mode=Mode::Custom;
+   settings.overrides.insert(today.to_string(),Override{
+    enabled:true,rules:vec![],resume_auto_count:Some(2)
+   });
+   assert!(settings.valid());
+   assert!(settings.rules_for_date(today).is_empty());
+   assert_eq!(settings.resume_for_date(today),Some(2));
+   assert_eq!(settings.resume_for_date(tomorrow),None);
+   assert_eq!(settings.rules_for_date(tomorrow).len(),1);
+  }
+  #[test]fn all_weekly_days_can_resume_without_any_anchor(){
+   let mut settings=Settings::default();
+   settings.mode=Mode::Custom;
+   settings.rules[0].start_kind=StartKind::Resume;
+   assert!(settings.valid());
+   assert!(settings.next_slot(Local::now()).is_none());
+   let today=Local::now().date_naive();
+   for offset in 0..7 {
+    assert_eq!(settings.resume_for_date(today+Duration::days(offset)),Some(6));
+   }
+  }
+  #[test]fn overlapping_weekly_anchor_and_resume_is_rejected(){
+   let mut settings=Settings::default();
+   let mut continuous=Rule::default();
+   continuous.id="continuous".into();
+   continuous.start_kind=StartKind::Resume;
+   settings.rules.push(continuous);
+   assert!(!settings.valid());
+  }
   #[test]fn topic_validation(){let mut s=Settings::default();s.ntfy_topic="https://ntfy.sh/codex-abc".into();assert!(s.valid());s.ntfy_topic="http://localhost/a".into();assert!(!s.valid());}
 }
