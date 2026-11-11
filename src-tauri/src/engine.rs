@@ -298,4 +298,33 @@ pub fn is_stale(now:i64,at:i64)->bool{now-at>90}
    assert_eq!(next.at,now+15);
   }
 
+   #[test]fn resumed_chain_survives_midnight_without_repeating_day_start(){
+    let today=Local::now().date_naive();
+    let tomorrow=today+Duration::days(1);
+    let now=today.and_hms_opt(22,0,0).unwrap().and_local_timezone(Local).earliest().unwrap().timestamp();
+    let reset=tomorrow.and_hms_opt(3,0,0).unwrap().and_local_timezone(Local).earliest().unwrap().timestamp();
+    let mut settings=Settings::default();settings.mode=Mode::Custom;settings.rules.clear();
+    settings.overrides.insert(today.to_string(),crate::schedule::Override{
+     enabled:true,rules:vec![],resume_auto_count:Some(3)});
+    let restored=Engine{resume_done_date:Some(today),chain_remaining:2,
+     chain_reset:Some(reset),..Default::default()};
+    let next=next_event(&settings,None,&restored,now).unwrap();
+    assert_eq!(next.kind,Kind::Chain);
+    assert_eq!(next.at,reset+RESET_GRACE_SEC);
+  }
+   #[test]fn pending_verification_prevents_duplicate_day_resume(){
+    let day=Local::now().date_naive();
+    let now=day.and_hms_opt(12,0,0).unwrap().and_local_timezone(Local).earliest().unwrap().timestamp();
+    let mut settings=Settings::default();settings.mode=Mode::Custom;
+    settings.overrides.insert(day.to_string(),crate::schedule::Override{
+     enabled:true,rules:vec![],resume_auto_count:Some(2)});
+    let state=Engine{
+     pending:Some(PendingVerification{at:now+120,expected_reset:now+5*3600,
+      auto_count:2,from_recovery:false,resume_date:Some(day)}),
+     ..Default::default()};
+    let next=next_event(&settings,None,&state,now).unwrap();
+    assert_eq!(next.kind,Kind::Verify);
+    assert_eq!(next.at,now+120);
+  }
+
 }
