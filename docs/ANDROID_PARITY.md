@@ -9,8 +9,8 @@ Android source of truth: [ChrisTorng/android-codex-tools](https://github.com/Chr
 | `RemainingQuotaView` | 5h blue / weekly orange; confirmed-window actual solid and ideal dashed; clock axis | ECharts in `src/main.ts` | Corresponding information and colors; Canvas pixel-level rendering not identical |
 | `UsageHistoryView` | Yesterday / today; solid actual, dashed ideal; event markers and sample list | ECharts + SQLite history & event log | Time/date plots and global marker; secondary detailed event heuristics still require regression |
 | `Scheduler.storeQuota` | Detect unconfirmed sliding reset placeholders; weekly global reset invalidation | `confirmed_primary` in `src-tauri/src/lib.rs` | Unit-level comparisons; live reset transitions still need tests |
-| `ScheduleConfig` | Daily 06:00+3 default, weekly days, overrides today/tomorrow, conflict checks | `src-tauri/src/schedule.rs` and editors in TypeScript | Tests for defaults/overrides/collisions; backend rejects conflicting anchors; Windows DST and override edge cases need tests |
-| `Scheduler` | Mode Off, reset Auto, anchors + actual 5h reset chained triggers, 60s tolerance and 15s grace | `src-tauri/src/engine.rs`, `src-tauri/src/lib.rs` | Rust tests for planning and stale wakeups; process-local runtime **cannot run after Quit** |
+| `ScheduleConfig` | Weekly anchors or all-week continuous resume, today/tomorrow overrides, missed-anchor policy with three choices, conflict checks | `src-tauri/src/schedule.rs` and editors in TypeScript | Tests cover weekly resume, override isolation and anchor conflicts; local-time DST edge cases and actual trigger times require device verification |
+| `Scheduler` | Mode Off, reset Auto, fixed anchors, continuous 5h follow-ups, same-day missed-anchor recovery | `src-tauri/src/engine.rs`, `src-tauri/src/lib.rs` | Rust tests cover 5h reset planning, cross-midnight chains, pending verification and missed anchors; process-local runtime **cannot run after Quit** |
 | `CodexClient.triggerMinimal` | Minimal Codex request to open usage window | `src-tauri/src/api.rs` | Explicit UI confirmation and backend quota guards; real service response requires user testing |
 | `CodexClient.getResetCredits/consumeResetCredit` | Banked Reset count/expiry, exhausted/manual/armed | `src-tauri/src/api.rs` / UI | Backend revalidation; armed selection persists across restarts, but does not run while app is stopped |
 | `UsageHistory.refreshGlobalResetStats` | `codex-reset.com` forecast and announced timeline median/average | `src-tauri/src/api.rs` | Public forecast/timeline, best-effort network |
@@ -25,9 +25,13 @@ Android source of truth: [ChrisTorng/android-codex-tools](https://github.com/Chr
 2. Verify the **5h and weekly figures are remaining quota** and the reset axes/ideal curves do not imply confirmation of an inactive window.
 3. Verify 10/15/30/60-minute sampling, stored history, yesterday/today plot and persisted light/dark theme.
 4. Verify close → tray hides but samples continue, tray Show restores, tray Quit ends process and stops monitoring.
-5. Check weekly schedule and today/tomorrow override editors, disabled override and empty-day suppression. **Do not enable a credit-consuming schedule on two devices for the same account.**
+5. Check weekly anchors and all-week continuous mode; verify today/tomorrow overrides, earliest eligible time, cross-midnight constraints, missed-anchor three-choice policy and conflict rejection. **Do not enable a credit-consuming schedule on two devices for the same account.**
 6. Only with explicit consent and sufficient quota, test manual trigger, automatic schedule, and Banked Reset. They can consume quota or a stored reset.
 7. Verify optional random ntfy topic is private and not shared among app installations. Check notification delivery.
-8. Test sleep/resume, timezone changes, network loss, OAuth refresh errors and a system reboot. Stale scheduler actions must not be silently replayed.
+8. Test sleep/resume, timezone changes, network loss, OAuth refresh errors and a system reboot. Confirm previously pending verification and remaining follow-ups survive reboot without sending duplicate triggers; stale scheduler actions must not be silently replayed.
 
 Do not claim full Android behavioral parity until these Windows scenarios have passed. Unit tests and CI compiling alone are insufficient.
+
+## Windows startup regression
+
+The v2.0.20 Rust 2021 `Snapshot` struct initializer acquired `engine` twice in the same statement, causing a self-deadlock. v2.0.28 changed this to a single `snapshot_engine()` acquisition and added a release test. Subsequent cleanup removes redundant startup icon cache flushing and split-history fallback IPC; CI does not substitute for verifying the installed Windows GUI opens, displays saved history, and updates current usage.
