@@ -264,7 +264,7 @@ final class UsageHistory {
                         "本機推論");
             }
         }else if(naturalWeekly && weeklyDropped){
-            addEvent(c,"weekly_reset","週配額自然重置","OpenAI quota");
+            addEvent(c,"weekly_reset","週用量自然重置","OpenAI quota");
         }
     }
 
