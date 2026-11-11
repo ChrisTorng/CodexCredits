@@ -52,15 +52,6 @@ struct Snapshot{
  error:Option<String>,
  signed_in:bool,
 }
-#[cfg(target_os="windows")]
-fn refresh_windows_icon_cache(){
- // Refresh old 16px portable EXE icons retained by Windows Explorer.
- #[link(name="shell32")]
- unsafe extern "system" {
-  fn SHChangeNotify(event_id:i32,flags:u32,item1:*const std::ffi::c_void,item2:*const std::ffi::c_void);
- }
- unsafe{SHChangeNotify(0x08000000,0,std::ptr::null(),std::ptr::null());}
-}
 fn now()->i64{chrono::Utc::now().timestamp()}
 fn token()->Result<String,String>{credentials::load()}
 #[cfg(target_os="android")]
@@ -434,7 +425,7 @@ async fn trigger(s:&State,followups:u8,kind:&str)->Result<TriggerOutcome,String>
   TriggerOutcome::Unchanged=>{
    let reset=after.five_reset.as_deref().unwrap_or("—");
    record(s,"trigger_no_change",&format!("{kind}請求完成，但 5h 視窗未重新開始 · 原重置時間不變 · {reset}"));
-   notify(s,"Codex 請求完成，5h 視窗未重啟","官方配額仍顯示原來的重置時間，沒有建立新視窗").await;
+   notify(s,"Codex 請求完成，5h 視窗未重啟","官方用量仍顯示原來的重置時間，沒有建立新視窗").await;
   },
   TriggerOutcome::Pending=>{
    record(s,"trigger_pending",&format!("{kind}請求完成，但 5h 視窗是否新建仍待確認"));
@@ -450,10 +441,10 @@ async fn consume(s:&State,allow_partial:bool,selected:Option<String>)->Result<()
  // Always re-check the server's latest quota before redemption, even if
  // the UI previously showed an eligible state. 100%/98% must not be redeemed.
  if !api::banked_reset_eligible(&current){
-  return Err("目前不需要重置：OpenAI 規定至少一項適用配額剩餘低於 80% 才能使用 Banked Reset（Your usage does not need a reset right now）".into());
+  return Err("目前不需要重置：OpenAI 規定至少一項適用用量剩餘低於 80% 才能使用 Banked Reset（Your usage does not need a reset right now）".into());
  }
  if !allow_partial&&!engine::exhausted(&current){
-  return Err("配額尚未用盡；如要提早重置，請選擇「立即使用（含部分用量）」".into());
+  return Err("用量尚未用盡；如要提早重置，請選擇「立即使用（含部分用量）」".into());
  }
  let access=oauth::valid_access().await?;
  let c=api::fetch_credits(&access.token,access.account_id.as_deref()).await?;
@@ -467,7 +458,7 @@ async fn consume(s:&State,allow_partial:bool,selected:Option<String>)->Result<()
   .ok_or("目前沒有有效的 Banked Reset")?;
  if c.count<=0{return Err("Banked Reset 可用次數為 0".into())}
  let windows=api::consume_credit(&access.token,access.account_id.as_deref(),&credit.id).await?;
- if windows<=0{return Err("OpenAI 未確認重置任何配額視窗；請重新整理官方 Usage 確認 Banked Reset 仍在，避免重複嘗試".into())}
+ if windows<=0{return Err("OpenAI 未確認重置任何用量視窗；請重新整理官方 Usage 確認 Banked Reset 仍在，避免重複嘗試".into())}
  *s.armed.lock().unwrap()=None;
  {
   let db=s.db.lock().unwrap();
@@ -478,7 +469,7 @@ async fn consume(s:&State,allow_partial:bool,selected:Option<String>)->Result<()
  tokio::time::sleep(Duration::from_secs(1)).await;
  let _=refresh_internal(s,true).await;
  record(s,"banked_reset",&format!("Banked Reset 已使用 · 重置 {windows} 個視窗"));
- notify(s,"Codex Banked Reset 完成",&format!("已重置 {windows} 個配額視窗")).await;
+ notify(s,"Codex Banked Reset 完成",&format!("已重置 {windows} 個用量視窗")).await;
  replan(s);Ok(())
 }
 #[tauri::command]fn get_snapshot(s:tauri::State<'_,Arc<State>>)->Snapshot{snapshot(&s)}
@@ -571,7 +562,7 @@ async fn consume(s:&State,allow_partial:bool,selected:Option<String>)->Result<()
   android_bridge::arm_banked(next.is_some())?;
   if next.is_some()&&!android_bridge::banked_armed()?{
    storage::set_meta(&s.db.lock().unwrap(),"banked_armed",None)?;
-   return Err("Android 背景排程尚無可用的 Banked Reset，請先更新配額".into());
+   return Err("Android 背景排程尚無可用的 Banked Reset，請先更新用量".into());
   }
  }
  *s.armed.lock().unwrap()=next.clone();
@@ -600,18 +591,6 @@ async fn consume(s:&State,allow_partial:bool,selected:Option<String>)->Result<()
   (storage::history(&db)?,storage::events(&db)?)
  };
  Ok(LocalState{snapshot:snapshot(&s),history,events})
-}
-#[tauri::command]fn get_history(s:tauri::State<'_,Arc<State>>)->Result<Vec<serde_json::Value>,String>{
- let db=s.db.lock().unwrap();
- #[cfg(target_os="android")]
- legacy::sync_native(&db)?;
- storage::history(&db)
-}
-#[tauri::command]fn get_events(s:tauri::State<'_,Arc<State>>)->Result<Vec<serde_json::Value>,String>{
- let db=s.db.lock().unwrap();
- #[cfg(target_os="android")]
- legacy::sync_native(&db)?;
- storage::events(&db)
 }
 fn defer_scheduled_retry(s:&State,planned:&engine::Next,seconds:i64){
  let mut e=s.engine.lock().unwrap();
@@ -876,16 +855,7 @@ pub fn run(){
   if let Some(window)=app.get_webview_window("main"){
    window.set_icon(icon.clone())?;
   }
-  #[cfg(target_os="windows")]
-  {
-   let key=concat!("icon_cache_refreshed_",env!("CARGO_PKG_VERSION"));
-   let db=state.db.lock().unwrap();
-   if storage::get_meta(&db,key).is_none(){
-    refresh_windows_icon_cache();
-    let _=storage::set_meta(&db,key,Some("1"));
-   }
-  }
-  TrayIconBuilder::with_id("quota").icon(tray_status::icon(None,now())).tooltip("Codex Credits · 正在取得配額").show_menu_on_left_click(false).menu(&menu)
+  TrayIconBuilder::with_id("quota").icon(tray_status::icon(None,now())).tooltip("Codex Credits · 正在取得用量").show_menu_on_left_click(false).menu(&menu)
    .on_tray_icon_event(|tray,event|{
      if let TrayIconEvent::DoubleClick{button:MouseButton::Left,..}=event{
        if let Some(window)=tray.app_handle().get_webview_window("main"){
@@ -968,7 +938,7 @@ pub fn run(){
  })
  .invoke_handler(tauri::generate_handler![
   get_snapshot,save_settings,login_with_chatgpt,sign_out,refresh,manual_trigger,
-  banked_reset,toggle_banked_armed,ntfy_test,native_notify_test,get_local_state,get_history,get_events,
+  banked_reset,toggle_banked_armed,ntfy_test,native_notify_test,get_local_state,
   android_platform_status,android_open_system_settings
  ])
  .run(tauri::generate_context!()).expect("CodexCredits could not start");
