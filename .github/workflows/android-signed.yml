@@ -13,7 +13,7 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 permissions:
-  contents: read
+  contents: write
 jobs:
   signed-apk:
     runs-on: ubuntu-latest
@@ -91,3 +91,19 @@ jobs:
           name: CodexCredits-Android-v2.0.29-Signed-Release
           path: signed/
           if-no-files-found: error
+
+      - name: Publish verified signed APK to GitHub Releases
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[publish-release]') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p "require('./package.json').version")
+          test -n "$VERSION"
+          TAG="v${VERSION}"
+          test -s "signed/CodexCredits-Android-v${VERSION}-arm64.apk"
+          cp signed/SHA256SUMS.txt "signed/CodexCredits-Android-v${VERSION}-SHA256SUMS.txt"
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --target "$GITHUB_SHA" --title "Codex Credits $TAG" --notes 'Windows installer/portable ZIP and cryptographically verified, upgrade-compatible signed Android APK. Verify hashes before installing.' || gh release view "$TAG" >/dev/null
+          fi
+          gh release upload "$TAG" "signed/CodexCredits-Android-v${VERSION}-arm64.apk" "signed/CodexCredits-Android-v${VERSION}-SHA256SUMS.txt" --clobber

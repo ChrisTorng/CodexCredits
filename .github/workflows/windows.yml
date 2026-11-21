@@ -9,7 +9,7 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 permissions:
-  contents: read
+  contents: write
 jobs:
   build:
     runs-on: windows-latest
@@ -64,3 +64,33 @@ jobs:
           name: CodexCredits-Windows-v${{ steps.stage.outputs.version }}-x64
           path: release/
           if-no-files-found: error
+
+      - name: Publish versioned Windows installer and portable package
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[publish-release]') }}
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $tag = "v$version"
+          $zip = "CodexCredits-Windows-v$version-x64.zip"
+          Compress-Archive -Path 'release/*' -DestinationPath $zip -Force
+          $setups = @(Get-ChildItem release -Filter '*-setup.exe')
+          if ($setups.Count -ne 1) { throw 'Expected exactly one installer' }
+          $checks = @($zip, $setups[0].FullName)
+          $hashFile = "CodexCredits-Windows-v$version-SHA256SUMS.txt"
+          $checks | ForEach-Object {
+            $hash = (Get-FileHash $_ -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $(Split-Path $_ -Leaf)"
+          } | Set-Content $hashFile -Encoding ascii
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag --target $env:GITHUB_SHA --title "Codex Credits $tag" --notes 'Cross-platform Codex usage and scheduling application. Windows NSIS installer and portable ZIP; Android APK is produced by the independent signed Android workflow.'
+            if ($LASTEXITCODE -ne 0) {
+              gh release view $tag *> $null
+              if ($LASTEXITCODE -ne 0) { throw 'Unable to create or locate release' }
+            }
+          }
+          gh release upload $tag $zip $setups[0].FullName $hashFile --clobber
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to upload Windows release files' }
